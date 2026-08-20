@@ -39,11 +39,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.staffController = void 0;
 const staffService_1 = require("../services/staffService");
 const db_1 = __importDefault(require("../config/db"));
-const bcrypt_1 = __importDefault(require("bcrypt"));
-const uuid_1 = require("uuid");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const XLSX = __importStar(require("xlsx"));
-const paramUtils_1 = require("../utils/paramUtils"); // if you have this utility
+const paramUtils_1 = require("../utils/paramUtils");
 const zod_1 = require("zod");
+const crypto_1 = __importDefault(require("crypto"));
 const SALT_ROUNDS = 10;
 const STAFF_ROLES = ['ADMIN', 'TEACHER', 'PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN'];
 const roleMap = {
@@ -123,7 +123,7 @@ exports.staffController = {
             if (existing)
                 return res.status(400).json({ error: 'Email already in use' });
             const rawPassword = 'password123'; // In production, generate random
-            const hashedPassword = await bcrypt_1.default.hash(rawPassword, SALT_ROUNDS);
+            const hashedPassword = await bcryptjs_1.default.hash(rawPassword, SALT_ROUNDS);
             const subjectsArray = parseAssignedSubjects(assignedSubjects);
             const staff = await staffService_1.staffService.createStaff({
                 name,
@@ -225,7 +225,7 @@ exports.staffController = {
     },
     // GENERATE REGISTRATION LINK
     generateLink: async (req, res) => {
-        const token = (0, uuid_1.v4)();
+        const token = crypto_1.default.randomUUID();
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const link = `${frontendUrl}/register?token=${token}`;
         res.json({ link });

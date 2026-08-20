@@ -1,6 +1,6 @@
 import prisma from '../config/db';
 import { Role } from '@prisma/client';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { getCurrentTenantId } from '../utils/tenantContext';
 
 // ---------- Helper: build staff response ----------
