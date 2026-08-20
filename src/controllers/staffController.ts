@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
 import { staffService } from '../services/staffService';
 import prisma from '../config/db';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { Role } from '@prisma/client';
-import { getStringParam } from '../utils/paramUtils'; // if you have this utility
+import { getStringParam } from '../utils/paramUtils';
 import { z } from 'zod';
 
 const SALT_ROUNDS = 10;
