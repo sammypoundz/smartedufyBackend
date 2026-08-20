@@ -2,11 +2,11 @@ import { Request, Response } from 'express';
 import { staffService } from '../services/staffService';
 import prisma from '../config/db';
 import bcrypt from 'bcryptjs';
-import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { Role } from '@prisma/client';
 import { getStringParam } from '../utils/paramUtils';
 import { z } from 'zod';
+import crypto from 'crypto';
 
 const SALT_ROUNDS = 10;
 
@@ -197,7 +197,7 @@ export const staffController = {
 
   // GENERATE REGISTRATION LINK
   generateLink: async (req: Request, res: Response) => {
-    const token = uuidv4();
+    const token = crypto.randomUUID();
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const link = `${frontendUrl}/register?token=${token}`;
     res.json({ link });
