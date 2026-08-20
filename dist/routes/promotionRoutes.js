@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const promotionController_1 = require("../controllers/promotionController");
+const auth_1 = require("../middleware/auth");
+const roleGuard_1 = require("../middleware/roleGuard");
+const router = (0, express_1.Router)();
+router.use(auth_1.authMiddleware);
+router.post('/promote', (0, roleGuard_1.roleGuard)(['ADMIN']), promotionController_1.promotionController.promote);
+exports.default = router;

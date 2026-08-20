@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const budgetController_1 = require("../controllers/budgetController");
+const auth_1 = require("../middleware/auth");
+const roleGuard_1 = require("../middleware/roleGuard");
+const router = (0, express_1.Router)();
+router.get('/', auth_1.authMiddleware, budgetController_1.budgetController.getAllBudgets);
+router.post('/', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR', 'ACCOUNTANT']), budgetController_1.budgetController.createBudget);
+router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR', 'ACCOUNTANT']), budgetController_1.budgetController.updateBudget);
+router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR', 'ACCOUNTANT']), budgetController_1.budgetController.deleteBudget);
+exports.default = router;
