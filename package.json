@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "postinstall": "npm run build",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts",
+    "seed:goldenlight": "ts-node prisma/newSchoolSeed.ts"
   },
   "engines": {
     "node": ">=20.0.0 <22.0.0"
