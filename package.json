@@ -5,9 +5,9 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon src/server.ts",
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/server.js",
-    "postinstall": "npm run build",
+    "postinstall": "prisma generate && npm run build",
     "seed": "ts-node prisma/seed.ts",
     "seed:goldenlight": "ts-node prisma/newSchoolSeed.ts"
   },
