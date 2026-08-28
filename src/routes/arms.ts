@@ -9,6 +9,9 @@ const router = Router();
 // Get all arms for a specific class
 router.get('/class/:classId', authMiddleware, armController.getByClassId);
 
+// Get the authenticated teacher's class assignments
+router.get('/my-assignments', authMiddleware, roleGuard(['TEACHER']), armController.getMyAssignments);
+
 // Get all arms (with class relation) – used in teacher management
 router.get('/', authMiddleware, armController.getAll);
 

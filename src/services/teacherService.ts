@@ -55,7 +55,7 @@ export const teacherService = {
         },
         arms: {
           where: { schoolId: tenantId },
-          include: { 
+          include: {
             class: {
               select: {
                 id: true,
@@ -74,7 +74,7 @@ export const teacherService = {
               }
             },
             arm: {
-              include: { 
+              include: {
                 class: {
                   select: {
                     name: true,
@@ -269,6 +269,8 @@ export const teacherService = {
 
   /**
    * Delete a teacher.
+   * Cleans up all related records (arm assignments, subject-arms, subject-teacher
+   * join rows and the linked User account) so there are no orphaned rows.
    * @param id - Teacher ID
    * @returns The deleted teacher.
    */
@@ -278,8 +280,39 @@ export const teacherService = {
 
     console.log('🔍 Deleting teacher:', id);
 
-    return prisma.teacher.delete({
-      where: { id, schoolId: tenantId },
+    return prisma.$transaction(async (tx) => {
+      const teacher = await tx.teacher.findUnique({
+        where: { id, schoolId: tenantId },
+      });
+      if (!teacher) throw new Error('Teacher not found');
+
+      // Release arms previously assigned to this teacher
+      await tx.arm.updateMany({
+        where: { teacherId: teacher.id, schoolId: tenantId },
+        data: { teacherId: null },
+      });
+
+      // Remove subject-arm teaching assignments
+      await tx.subjectArm.updateMany({
+        where: { teacherId: teacher.id, schoolId: tenantId },
+        data: { teacherId: null },
+      });
+
+      // Remove subject-teacher join rows
+      await tx.subjectTeacher.deleteMany({
+        where: { teacherId: teacher.id, schoolId: tenantId },
+      });
+
+      const deleted = await tx.teacher.delete({
+        where: { id, schoolId: tenantId },
+      });
+
+      // Remove the linked user account
+      await tx.user.delete({
+        where: { id: teacher.userId, schoolId: tenantId },
+      });
+
+      return deleted;
     });
   },
 
@@ -303,15 +336,15 @@ export const teacherService = {
       console.log('❌ Teacher not found for password reset:', id);
       throw new Error('Teacher not found');
     }
-    
+
     const newPassword = Math.random().toString(36).slice(-8);
     const hashed = await bcrypt.hash(newPassword, 10);
-    
+
     await prisma.user.update({
       where: { id: teacher.userId, schoolId: tenantId },
       data: { password: hashed },
     });
-    
+
     console.log('✅ Password reset for teacher:', teacher.name);
     return newPassword;
   },

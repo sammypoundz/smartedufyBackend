@@ -2,12 +2,17 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: string;
+  schoolId: string;
+  isActive?: boolean;
+  name?: string;
+}
+
 export interface AuthRequest extends Request {
-  user?: {
-    id: string;
-    role: string;
-    schoolId: string; // 👈 added
-  };
+  user?: AuthUser;
 }
 
 export const authMiddleware = (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -16,11 +21,7 @@ export const authMiddleware = (req: AuthRequest, res: Response, next: NextFuncti
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
-      id: string;
-      role: string;
-      schoolId: string; // 👈 now expected in JWT
-    };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as AuthUser;
     req.user = decoded;
     next();
   } catch (err) {

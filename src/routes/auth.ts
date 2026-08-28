@@ -22,51 +22,57 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid school' });
     }
 
-    const user = await prisma.user.create({
-      data: {
-        name: data.name,
-        email: data.email,
-        password: hashedPassword,
-        role: data.role as any,
-        isActive: true,
-        schoolId,
-      },
-    });
+    // Create the user and their role-specific profile record atomically
+    // so all necessary tables are populated together.
+    const user = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          name: data.name,
+          email: data.email,
+          password: hashedPassword,
+          role: data.role as any,
+          isActive: true,
+          schoolId,
+        },
+      });
 
-    if (data.role === 'STUDENT') {
-      await prisma.student.create({
-        data: {
-          userId: user.id,
-          name: data.name,
-          gender: data.gender || '',
-          dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
-          address: data.address,
-          classId: data.classId || '',
-          armId: data.armId || '',
-          schoolId,
-        },
-      });
-    } else if (data.role === 'TEACHER') {
-      await prisma.teacher.create({
-        data: {
-          userId: user.id,
-          name: data.name,
-          email: data.email,
-          phone: data.phone || '',
-          schoolId,
-        },
-      });
-    } else if (data.role === 'PARENT') {
-      await prisma.parent.create({
-        data: {
-          userId: user.id,
-          name: data.name,
-          email: data.email,
-          phone: data.phone || '',
-          schoolId,
-        },
-      });
-    }
+      if (data.role === 'STUDENT') {
+        await tx.student.create({
+          data: {
+            userId: createdUser.id,
+            name: data.name,
+            gender: data.gender || '',
+            dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
+            address: data.address,
+            classId: data.classId || '',
+            armId: data.armId || '',
+            schoolId,
+          },
+        });
+      } else if (data.role === 'TEACHER') {
+        await tx.teacher.create({
+          data: {
+            userId: createdUser.id,
+            name: data.name,
+            email: data.email,
+            phone: data.phone || '',
+            schoolId,
+          },
+        });
+      } else if (data.role === 'PARENT') {
+        await tx.parent.create({
+          data: {
+            userId: createdUser.id,
+            name: data.name,
+            email: data.email,
+            phone: data.phone || '',
+            schoolId,
+          },
+        });
+      }
+
+      return createdUser;
+    });
 
     const token = jwt.sign(
       { id: user.id, role: user.role, schoolId },
@@ -83,6 +89,7 @@ router.post('/register', async (req, res, next) => {
         role: user.role,
         isActive: user.isActive,
         schoolId,
+        allowedPages: user.allowedPages || [],
       },
     });
   } catch (err) {
@@ -132,6 +139,7 @@ router.post('/login', async (req, res, next) => {
         role: user.role,
         isActive: user.isActive,
         schoolId: user.schoolId,
+        allowedPages: user.allowedPages || [],
       },
     });
   } catch (err) {

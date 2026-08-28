@@ -28,6 +28,7 @@ export const userService = {
         email: user.email,
         role: user.role,
         isActive: user.isActive,
+        allowedPages: user.allowedPages || [],
         createdAt: user.createdAt,
       };
     });
@@ -79,6 +80,7 @@ export const userService = {
       email: user.email,
       role: user.role,
       isActive: user.isActive,
+      allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,
     };
   },
@@ -89,26 +91,70 @@ export const userService = {
     password: string;
     role: string;
     isActive: boolean;
+    allowedPages?: string[];
   }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
     const hashedPassword = await bcrypt.hash(data.password, 10);
-    const user = await prisma.user.create({
-      data: {
-        name: data.name,
-        email: data.email,
-        password: hashedPassword,
-        role: data.role as any,
-        isActive: data.isActive,
-        schoolId: tenantId, // 👈 required
-      },
-      include: {
-        student: true,
-        teacher: true,
-        parent: true,
-      },
+
+    // Create the user AND its role-specific profile row atomically so all
+    // necessary tables are populated (data integrity).
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          name: data.name,
+          email: data.email,
+          password: hashedPassword,
+          role: data.role as any,
+          isActive: data.isActive,
+          allowedPages: data.allowedPages || [],
+          schoolId: tenantId, // 👈 required
+        },
+      });
+
+      if (created.role === 'TEACHER') {
+        await tx.teacher.create({
+          data: {
+            name: data.name,
+            email: data.email,
+            phone: '',
+            userId: created.id,
+            schoolId: tenantId,
+          },
+        });
+      } else if (created.role === 'PARENT') {
+        await tx.parent.create({
+          data: {
+            name: data.name,
+            email: data.email,
+            phone: '',
+            userId: created.id,
+            schoolId: tenantId,
+          },
+        });
+      } else if (created.role === 'STUDENT') {
+        await tx.student.create({
+          data: {
+            name: data.name,
+            gender: '',
+            userId: created.id,
+            schoolId: tenantId,
+          },
+        });
+      }
+
+      return tx.user.findUnique({
+        where: { id: created.id },
+        include: {
+          student: true,
+          teacher: true,
+          parent: true,
+        },
+      });
     });
+
+    if (!user) throw new Error('User creation failed');
 
     let displayName = data.name;
     if (user.role === 'STUDENT' && user.student) displayName = user.student.name;
@@ -121,6 +167,7 @@ export const userService = {
       email: user.email,
       role: user.role,
       isActive: user.isActive,
+      allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,
     };
   },
@@ -131,6 +178,7 @@ export const userService = {
     password: string;
     role: string;
     isActive: boolean;
+    allowedPages: string[];
   }>) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
@@ -170,8 +218,47 @@ export const userService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.user.delete({
-      where: { id, schoolId: tenantId },
+    // Delete dependent profile rows first so all related tables stay
+    // consistent (Payroll cascades automatically).
+    return prisma.$transaction(async (tx) => {
+      const teacher = await tx.teacher.findUnique({ where: { userId: id } });
+      if (teacher) {
+        // Detach teacher from arms / subject-arms before removal
+        await tx.arm.updateMany({
+          where: { teacherId: teacher.id, schoolId: tenantId },
+          data: { teacherId: null },
+        });
+        await tx.subjectArm.updateMany({
+          where: { teacherId: teacher.id, schoolId: tenantId },
+          data: { teacherId: null },
+        });
+        await tx.subjectTeacher.deleteMany({
+          where: { teacherId: teacher.id, schoolId: tenantId },
+        });
+        await tx.teacher.delete({ where: { id: teacher.id, schoolId: tenantId } });
+      }
+
+      const parent = await tx.parent.findUnique({ where: { userId: id } });
+      if (parent) {
+        // Detach children before removing the parent record
+        await tx.student.updateMany({
+          where: { parentId: parent.id, schoolId: tenantId },
+          data: { parentId: null },
+        });
+        await tx.parent.delete({ where: { id: parent.id, schoolId: tenantId } });
+      }
+
+      const student = await tx.student.findUnique({ where: { userId: id } });
+      if (student) {
+        await tx.studentSubject.deleteMany({
+          where: { studentId: student.id, schoolId: tenantId },
+        });
+        await tx.student.delete({ where: { id: student.id, schoolId: tenantId } });
+      }
+
+      return tx.user.delete({
+        where: { id, schoolId: tenantId },
+      });
     });
   },
 
@@ -200,6 +287,7 @@ export const userService = {
       email: user.email,
       role: user.role,
       isActive: user.isActive,
+      allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,
     };
   },

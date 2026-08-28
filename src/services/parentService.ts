@@ -49,23 +49,50 @@ export const parentService = {
     });
   },
 
-  update: (id: string, data: { name?: string; phone?: string; email?: string }) => {
+  update: async (id: string, data: { name?: string; phone?: string; email?: string }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.parent.update({
-      where: { id, schoolId: tenantId }, // explicit scope
-      data,
-      include: { children: true },
+    return prisma.$transaction(async (tx) => {
+      const parent = await tx.parent.update({
+        where: { id, schoolId: tenantId }, // explicit scope
+        data,
+        include: { children: true, user: true },
+      });
+
+      // Keep the linked User record in sync
+      const userUpdate: any = {};
+      if (data.name !== undefined) userUpdate.name = data.name;
+      if (data.email !== undefined) userUpdate.email = data.email;
+      if (data.phone !== undefined) userUpdate.phone = data.phone;
+      if (Object.keys(userUpdate).length > 0 && parent.user) {
+        await tx.user.update({ where: { id: parent.userId, schoolId: tenantId }, data: userUpdate });
+      }
+
+      return parent;
     });
   },
 
-  delete: (id: string) => {
+  delete: async (id: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.parent.delete({
-      where: { id, schoolId: tenantId },
+    return prisma.$transaction(async (tx) => {
+      const parent = await tx.parent.findUnique({ where: { id, schoolId: tenantId } });
+      if (!parent) throw new Error('Parent not found');
+
+      // Detach children so their parentId doesn't reference a removed parent
+      await tx.student.updateMany({
+        where: { parentId: parent.id, schoolId: tenantId },
+        data: { parentId: null },
+      });
+
+      const deleted = await tx.parent.delete({ where: { id, schoolId: tenantId } });
+
+      // Remove the linked parent user account
+      await tx.user.delete({ where: { id: parent.userId, schoolId: tenantId } });
+
+      return deleted;
     });
   },
 };

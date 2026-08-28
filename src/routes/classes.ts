@@ -8,8 +8,15 @@ const router = Router();
 
 // ==================== PUBLIC CLASS ROUTES (no auth) ====================
 // Students need to see classes and arms before logging in
-router.get('/', classController.getAll);                           // ✅ public
-router.get('/:classId/arms', armController.getByClassId);          // ✅ public
+router.get('/', authMiddleware, classController.getAll);
+router.get('/:classId/arms', armController.getByClassId);
+
+/**
+ * GET /api/classes/teacher/classes
+ * Returns only the classes assigned to the authenticated teacher.
+ * MUST be registered before '/:id' so 'teacher' is not treated as an id.
+ */
+router.get('/teacher/classes', authMiddleware, classController.getMyClasses);
 
 // ==================== PROTECTED CLASS ROUTES ====================
 /**

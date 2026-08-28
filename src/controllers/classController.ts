@@ -37,6 +37,75 @@ export const classController = {
   },
 
   /**
+   * GET /api/classes/teacher/classes
+   * Returns only the classes (with their arms) assigned to the authenticated
+   * teacher — arms where they are class teacher and arms where they teach
+   * at least one subject. Must be registered BEFORE /:id in the router.
+   */
+  getMyClasses: async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).user?.id;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+      const teacher = await prisma.teacher.findUnique({
+        where: { userId },
+        include: {
+          arms: {
+            include: {
+              class: { select: { id: true, name: true } },
+              _count: { select: { students: true } },
+            },
+          },
+          subjectArms: {
+            include: {
+              arm: {
+                include: {
+                  class: { select: { id: true, name: true } },
+                  _count: { select: { students: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!teacher) return res.json([]);
+
+      // Collect unique arms: class-teacher arms + arms where they teach subjects
+      const armMap = new Map<string, any>();
+      for (const arm of teacher.arms) armMap.set(arm.id, arm);
+      for (const sa of teacher.subjectArms) {
+        if (sa.arm) armMap.set(sa.arm.id, sa.arm);
+      }
+
+      // Group arms by class
+      const classMap = new Map<string, { id: string; name: string; arms: any[] }>();
+      for (const arm of armMap.values()) {
+        if (!arm.class) continue;
+        if (!classMap.has(arm.class.id)) {
+          classMap.set(arm.class.id, {
+            id: arm.class.id,
+            name: arm.class.name,
+            arms: [],
+          });
+        }
+        classMap.get(arm.class.id)!.arms.push({
+          id: arm.id,
+          letter: arm.letter,
+          alias: arm.alias,
+          teacherId: arm.teacherId,
+          _count: arm._count || { students: 0 },
+        });
+      }
+
+      res.json(Array.from(classMap.values()));
+    } catch (err: any) {
+      console.error('Get my classes error:', err);
+      res.status(500).json({ error: 'Failed to fetch your classes' });
+    }
+  },
+
+  /**
    * GET /api/classes/:id
    * Returns a single class with arms, teacher details, and student count.
    */

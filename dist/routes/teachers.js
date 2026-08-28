@@ -7,6 +7,8 @@ const roleGuard_1 = require("../middleware/roleGuard");
 const router = (0, express_1.Router)();
 // Get all teachers (any authenticated user)
 router.get('/', auth_1.authMiddleware, teacherController_1.teacherController.getAll);
+// ✅ GET /api/teachers/me - Get authenticated teacher's profile (must come BEFORE /:id)
+router.get('/me', auth_1.authMiddleware, teacherController_1.teacherController.getMe);
 // Get a single teacher by ID
 router.get('/:id', auth_1.authMiddleware, teacherController_1.teacherController.getById);
 // Create a new teacher (admin only)

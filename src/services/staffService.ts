@@ -28,7 +28,7 @@ export const buildStaffResponse = async (user: any) => {
   if (user.role === 'TEACHER' && teacherData) {
     const arms = teacherData.arms || [];
     const subjectArms = teacherData.subjectArms || [];
-    staff.teacherType = arms.length > 0 ? 'class_teacher' : 
+    staff.teacherType = arms.length > 0 ? 'class_teacher' :
                        (subjectArms.length > 0 ? 'subject_teacher' : null);
     staff.assignedClass = arms[0]?.class?.name || null;
     staff.assignedSubjects = subjectArms.map((sa: any) => ({
@@ -96,60 +96,65 @@ export const staffService = {
 
     const { name, email, role, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
 
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        role,
-        isActive: true,
-        schoolId: tenantId,
-      },
-    });
-
-    if (role === 'TEACHER') {
-      const teacher = await prisma.teacher.create({
+    // Create the user and any role-specific records atomically
+    const user = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
         data: {
-          name: name || '',
+          name,
           email,
-          userId: user.id,
+          password: hashedPassword,
+          role,
+          isActive: true,
           schoolId: tenantId,
         },
       });
 
-      if (teacherType === 'class_teacher' && assignedClass) {
-        const arm = await prisma.arm.findFirst({
-          where: { class: { name: assignedClass }, schoolId: tenantId },
+      if (role === 'TEACHER') {
+        const teacher = await tx.teacher.create({
+          data: {
+            name: name || '',
+            email,
+            userId: createdUser.id,
+            schoolId: tenantId,
+          },
         });
-        if (arm) {
-          await prisma.arm.update({
-            where: { id: arm.id, schoolId: tenantId },
-            data: { teacherId: teacher.id },
-          });
-        }
-      }
 
-      if (teacherType === 'subject_teacher' && assignedSubjects?.length) {
-        for (const subj of assignedSubjects) {
-          const subject = await prisma.subject.findFirst({
-            where: { name: subj.subject, schoolId: tenantId },
+        if (teacherType === 'class_teacher' && assignedClass) {
+          const arm = await tx.arm.findFirst({
+            where: { class: { name: assignedClass }, schoolId: tenantId },
           });
-          const arm = await prisma.arm.findFirst({
-            where: { class: { name: subj.class }, schoolId: tenantId },
-          });
-          if (subject && arm) {
-            await prisma.subjectArm.create({
-              data: {
-                subjectId: subject.id,
-                armId: arm.id,
-                teacherId: teacher.id,
-                schoolId: tenantId,
-              },
+          if (arm) {
+            await tx.arm.update({
+              where: { id: arm.id, schoolId: tenantId },
+              data: { teacherId: teacher.id },
             });
           }
         }
+
+        if (teacherType === 'subject_teacher' && assignedSubjects?.length) {
+          for (const subj of assignedSubjects) {
+            const subject = await tx.subject.findFirst({
+              where: { name: subj.subject, schoolId: tenantId },
+            });
+            const arm = await tx.arm.findFirst({
+              where: { class: { name: subj.class }, schoolId: tenantId },
+            });
+            if (subject && arm) {
+              await tx.subjectArm.create({
+                data: {
+                  subjectId: subject.id,
+                  armId: arm.id,
+                  teacherId: teacher.id,
+                  schoolId: tenantId,
+                },
+              });
+            }
+          }
+        }
       }
-    }
+
+      return createdUser;
+    });
 
     return buildStaffResponse(user);
   },
@@ -275,20 +280,37 @@ export const staffService = {
     });
     if (!user) throw new Error('Staff not found');
 
-    if (user.role === 'TEACHER') {
-      const teacher = await prisma.teacher.findUnique({
-        where: { userId: id, schoolId: tenantId },
-      });
-      if (teacher) {
-        await prisma.teacher.delete({
-          where: { id: teacher.id, schoolId: tenantId },
+    // Delete all related records atomically so no orphaned rows remain
+    // (Payroll has onDelete: Cascade and cleans itself up)
+    await prisma.$transaction(async (tx) => {
+      if (user.role === 'TEACHER') {
+        const teacher = await tx.teacher.findUnique({
+          where: { userId: id, schoolId: tenantId },
         });
+        if (teacher) {
+          // Release arms and subject-arm assignments
+          await tx.arm.updateMany({
+            where: { teacherId: teacher.id, schoolId: tenantId },
+            data: { teacherId: null },
+          });
+          await tx.subjectArm.updateMany({
+            where: { teacherId: teacher.id, schoolId: tenantId },
+            data: { teacherId: null },
+          });
+          await tx.subjectTeacher.deleteMany({
+            where: { teacherId: teacher.id, schoolId: tenantId },
+          });
+          await tx.teacher.delete({
+            where: { id: teacher.id, schoolId: tenantId },
+          });
+        }
       }
-    }
 
-    await prisma.user.delete({
-      where: { id, schoolId: tenantId },
+      await tx.user.delete({
+        where: { id, schoolId: tenantId },
+      });
     });
+
     return { message: 'Staff deleted successfully' };
   },
 

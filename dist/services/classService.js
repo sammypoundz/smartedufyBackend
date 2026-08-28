@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.armService = exports.classService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const tenantContext_1 = require("../utils/tenantContext");
-
 exports.classService = {
     /**
      * Get all classes with arms, each arm including its teacher and student count.
@@ -25,75 +24,6 @@ exports.classService = {
             },
         },
     }), // middleware adds schoolId
-
-    /**
-     * Get classes assigned to a specific teacher by userId.
-     * First finds the teacher record using the userId, then fetches classes.
-     * Returns only classes where the teacher is assigned to at least one arm.
-     * Only includes arms where the teacher is assigned.
-     */
-    getTeacherClasses: async (userId) => {
-        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
-        
-        console.log('🔍 getTeacherClasses called with userId:', userId);
-        
-        // First, find the teacher record using the userId
-        const teacher = await db_1.default.teacher.findUnique({
-            where: { userId: userId },
-            select: { id: true, name: true, schoolId: true }
-        });
-        
-        if (!teacher) {
-            console.log('❌ Teacher record not found for user:', userId);
-            return [];
-        }
-        
-        console.log('✅ Teacher found:', teacher.name, 'Teacher ID:', teacher.id);
-        
-        const classes = await db_1.default.class.findMany({
-            where: {
-                schoolId: tenantId,
-                arms: {
-                    some: {
-                        teacherId: teacher.id, // Use the teacher's ID, not the user ID
-                    },
-                },
-            },
-            include: {
-                arms: {
-                    where: {
-                        teacherId: teacher.id, // Only return arms the teacher is assigned to
-                    },
-                    include: {
-                        teacher: {
-                            select: {
-                                id: true,
-                                name: true,
-                                email: true,
-                                phone: true,
-                            },
-                        },
-                        _count: {
-                            select: {
-                                students: true,
-                            },
-                        },
-                    },
-                    orderBy: {
-                        letter: 'asc',
-                    },
-                },
-            },
-            orderBy: {
-                name: 'asc',
-            },
-        });
-        
-        console.log('📚 Classes found for teacher:', classes.length);
-        return classes;
-    },
-
     /**
      * Get a single class by ID, including arms with teacher and student count.
      */
@@ -112,44 +42,42 @@ exports.classService = {
             },
         },
     }),
-
     /**
      * Create a new class.
      */
     create: async (name) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
+        if (!tenantId)
+            throw new Error('Tenant context missing');
         return db_1.default.class.create({
             data: { name, schoolId: tenantId },
         });
     },
-
     /**
      * Update a class name.
      */
     update: async (id, name) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
+        if (!tenantId)
+            throw new Error('Tenant context missing');
         return db_1.default.class.update({
             where: { id, schoolId: tenantId },
             data: { name },
         });
     },
-
     /**
      * Delete a class and all its dependent data (arms, students, attendance, results, etc.).
      */
     delete: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
-        
+        if (!tenantId)
+            throw new Error('Tenant context missing');
         // 1. Get all arm IDs for this class, ensuring they belong to the tenant
         const arms = await db_1.default.arm.findMany({
             where: { classId: id, schoolId: tenantId },
             select: { id: true },
         });
         const armIds = arms.map(arm => arm.id);
-
         // 2. Get all student IDs for these arms
         let studentIds = [];
         if (armIds.length > 0) {
@@ -159,7 +87,6 @@ exports.classService = {
             });
             studentIds = students.map(student => student.id);
         }
-
         // 3. Delete records that depend on students
         if (studentIds.length > 0) {
             await db_1.default.attendance.deleteMany({
@@ -175,7 +102,6 @@ exports.classService = {
                 where: { id: { in: studentIds }, schoolId: tenantId },
             });
         }
-
         // 4. Delete records that depend on arms
         if (armIds.length > 0) {
             await db_1.default.timetableEntry.deleteMany({
@@ -191,14 +117,12 @@ exports.classService = {
                 where: { id: { in: armIds }, schoolId: tenantId },
             });
         }
-
         // 5. Finally delete the class
         return db_1.default.class.delete({
             where: { id, schoolId: tenantId },
         });
     },
 };
-
 // ----------------------------------------------------------------------
 // Arm service – separate CRUD operations for arms (used by frontend)
 // ----------------------------------------------------------------------
@@ -208,7 +132,8 @@ exports.armService = {
      */
     create: async (data) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
+        if (!tenantId)
+            throw new Error('Tenant context missing');
         return db_1.default.arm.create({
             data: {
                 letter: data.letter,
@@ -227,13 +152,13 @@ exports.armService = {
             },
         });
     },
-
     /**
      * Update an existing arm (partial update).
      */
     update: async (id, data) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
+        if (!tenantId)
+            throw new Error('Tenant context missing');
         return db_1.default.arm.update({
             where: { id, schoolId: tenantId },
             data,
@@ -247,7 +172,6 @@ exports.armService = {
             },
         });
     },
-
     /**
      * Delete an arm – also removes all dependent data (students, results, etc.).
      * Note: The frontend may want to handle cascading deletes manually or rely on
@@ -256,15 +180,14 @@ exports.armService = {
      */
     delete: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId) throw new Error('Tenant context missing');
-        
+        if (!tenantId)
+            throw new Error('Tenant context missing');
         // 1. Get all students in this arm, ensuring they belong to the tenant
         const students = await db_1.default.student.findMany({
             where: { armId: id, schoolId: tenantId },
             select: { id: true },
         });
         const studentIds = students.map(s => s.id);
-
         // 2. Delete student-dependent records
         if (studentIds.length > 0) {
             await db_1.default.attendance.deleteMany({
@@ -280,7 +203,6 @@ exports.armService = {
                 where: { id: { in: studentIds }, schoolId: tenantId },
             });
         }
-
         // 3. Delete arm-dependent records
         await db_1.default.timetableEntry.deleteMany({
             where: { armId: id, schoolId: tenantId },
@@ -291,7 +213,6 @@ exports.armService = {
         await db_1.default.subjectArm.deleteMany({
             where: { armId: id, schoolId: tenantId },
         });
-
         // 4. Finally delete the arm
         return db_1.default.arm.delete({
             where: { id, schoolId: tenantId },

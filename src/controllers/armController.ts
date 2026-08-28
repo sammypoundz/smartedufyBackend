@@ -4,7 +4,9 @@ import { subjectService } from '../services/subjectService';
 import { skillService } from '../services/skillService'; // optional if you need to validate skill existence
 import { createArmSchema, updateArmSchema } from '../validations/armValidation';
 import { getStringParam } from '../utils/paramUtils';
+import { getCurrentTenantId } from '../utils/tenantContext';
 import { z } from 'zod';
+import prisma from '../config/db';
 
 const addSubjectSchema = z.object({
   subjectId: z.string().optional(),
@@ -22,6 +24,73 @@ const updateArmSubjectTeacherSchema = z.object({
 });
 
 export const armController = {
+  // NEW: Get all class-arm assignments for the authenticated teacher
+  getMyAssignments: async (req: any, res: Response) => {
+    try {
+      const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.id } });
+      if (!teacher) return res.status(403).json({ error: 'Forbidden' });
+
+      const tenantId = getCurrentTenantId();
+      const [formArms, subjectArms] = await Promise.all([
+        // Arms where teacher is the form teacher
+        prisma.arm.findMany({
+          where: { teacherId: teacher.id, schoolId: tenantId },
+          include: {
+            class: { select: { id: true, name: true } },
+            subjects: { where: { teacherId: teacher.id }, include: { subject: { select: { name: true } } } },
+          },
+        }),
+        // Arms where teacher teaches at least one subject
+        prisma.subjectArm.findMany({
+          where: { teacherId: teacher.id, arm: { schoolId: tenantId } },
+          include: {
+            subject: { select: { name: true } },
+            arm: { include: { class: { select: { id: true, name: true } } } },
+          },
+        }),
+      ]);
+
+      // Merge into a map keyed by armId
+      const map = new Map<string, any>();
+
+      for (const arm of formArms) {
+        map.set(arm.id, {
+          armId: arm.id,
+          armName: arm.alias || arm.letter,
+          armIdName: `${arm.class.name} ${arm.alias || arm.letter}`,
+          classId: arm.class.id,
+          className: arm.class.name,
+          isFormTeacher: true,
+          subjectNames: arm.subjects.map((sa) => sa.subject.name),
+        });
+      }
+
+      for (const sa of subjectArms) {
+        const existing = map.get(sa.arm.id);
+        if (existing) {
+          if (!existing.subjectNames.includes(sa.subject.name)) {
+            existing.subjectNames.push(sa.subject.name);
+          }
+        } else {
+          map.set(sa.arm.id, {
+            armId: sa.arm.id,
+            armName: sa.arm.alias || sa.arm.letter,
+            armIdName: `${sa.arm.class.name} ${sa.arm.alias || sa.arm.letter}`,
+            classId: sa.arm.class.id,
+            className: sa.arm.class.name,
+            isFormTeacher: false,
+            subjectNames: [sa.subject.name],
+          });
+        }
+      }
+
+      res.json(Array.from(map.values()));
+    } catch (err: any) {
+      console.error('Get my assignments error:', err);
+      res.status(500).json({ error: 'Failed to fetch class assignments' });
+    }
+  },
+
   // ---------- Existing methods ----------
   getByClassId: async (req: Request, res: Response) => {
     const classId = getStringParam(req.params.classId);
@@ -30,10 +99,29 @@ export const armController = {
     res.json(arms);
   },
 
-  getById: async (req: Request, res: Response) => {
+  getById: async (req: any, res: Response) => {
     const id = getStringParam(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid id' });
     try {
+      // Teachers may only view arms they are assigned to (as form teacher or subject teacher)
+      if (req.user?.role?.toUpperCase() === 'TEACHER') {
+        const teacher = await prisma.teacher.findUnique({ where: { userId: req.user.id } });
+        if (!teacher) return res.status(403).json({ error: 'Forbidden' });
+
+        const arm = await prisma.arm.findFirst({
+          where: {
+            id,
+            OR: [
+              { teacherId: teacher.id }, // form teacher of the arm
+              { subjects: { some: { teacherId: teacher.id } } }, // teaches a subject in the arm
+            ],
+          },
+        });
+        if (!arm) {
+          return res.status(403).json({ error: 'Forbidden', message: 'You are not assigned to this class' });
+        }
+      }
+
       const arm = await armService.getById(id);
       if (!arm) return res.status(404).json({ error: 'Arm not found' });
       res.json(arm);

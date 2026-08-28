@@ -113,3 +113,4 @@ prisma.$use(async (params, next) => {
 });
 
 export { prisma };
+export default prisma;

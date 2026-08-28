@@ -5,7 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.staffService = exports.buildStaffResponse = void 0;
 const db_1 = __importDefault(require("../config/db"));
-const bcrypt_1 = __importDefault(require("bcrypt"));
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const tenantContext_1 = require("../utils/tenantContext");
 // ---------- Helper: build staff response ----------
 const buildStaffResponse = async (user) => {
@@ -300,7 +300,7 @@ exports.staffService = {
                     results.errors.push({ row, error: 'Invalid role' });
                     continue;
                 }
-                const hashedPassword = await bcrypt_1.default.hash('password123', 10);
+                const hashedPassword = await bcryptjs_1.default.hash('password123', 10);
                 const subjectsArray = parseAssignedSubjects(assignedSubjects);
                 const user = await exports.staffService.createStaff({
                     name,
