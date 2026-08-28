@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { teacherService } from '../services/teacherService';
 import { getStringParam } from '../utils/paramUtils';
 import { z } from 'zod';
+import db from '../config/db';
 
 const createTeacherSchema = z.object({
   name: z.string().min(1),
@@ -14,7 +15,7 @@ const updateTeacherSchema = z.object({
   name: z.string().min(1).optional(),
   email: z.string().email().optional(),
   phone: z.string().optional(),
-  isActive: z.boolean().optional(), // ✅ NEW: for suspend/activate
+  isActive: z.boolean().optional(), // for suspend/activate
 });
 
 export const teacherController = {
@@ -26,6 +27,85 @@ export const teacherController = {
     } catch (err: any) {
       console.error('Get all teachers error:', err);
       res.status(500).json({ error: 'Failed to fetch teachers' });
+    }
+  },
+
+  /**
+   * GET /api/teachers/me
+   * Get the authenticated teacher's profile
+   */
+  getMe: async (req: Request, res: Response) => {
+    try {
+      // Use optional chaining to safely access req.user
+      const userId = req.user?.id;
+      console.log('🔍 getMe called with userId:', userId);
+      
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized - User ID not found' });
+      }
+
+      // Find teacher by userId
+      const teacher = await db.teacher.findUnique({
+        where: { userId: userId },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              role: true,
+              isActive: true,
+            }
+          },
+          arms: {
+            include: {
+              class: {
+                select: {
+                  id: true,
+                  name: true,
+                }
+              }
+            }
+          },
+          subjectArms: {
+            include: {
+              subject: {
+                select: {
+                  id: true,
+                  name: true,
+                }
+              },
+              arm: {
+                select: {
+                  id: true,
+                  letter: true,
+                  class: {
+                    select: {
+                      name: true,
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (!teacher) {
+        console.log('❌ Teacher not found for user:', userId);
+        return res.status(404).json({ 
+          error: 'Teacher profile not found',
+          message: 'No teacher profile exists for this user. Please contact your administrator.'
+        });
+      }
+
+      console.log('✅ Teacher found:', teacher.name);
+      res.json(teacher);
+    } catch (err: any) {
+      console.error('Get current teacher error:', err);
+      res.status(500).json({ 
+        error: 'Failed to fetch teacher profile',
+        details: err.message 
+      });
     }
   },
 

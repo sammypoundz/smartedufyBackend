@@ -8,6 +8,9 @@ const router = Router();
 // Get all teachers (any authenticated user)
 router.get('/', authMiddleware, teacherController.getAll);
 
+// ✅ GET /api/teachers/me - Get authenticated teacher's profile (must come BEFORE /:id)
+router.get('/me', authMiddleware, teacherController.getMe);
+
 // Get a single teacher by ID
 router.get('/:id', authMiddleware, teacherController.getById);
 

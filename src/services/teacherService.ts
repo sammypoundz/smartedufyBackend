@@ -13,7 +13,7 @@ export const teacherService = {
     return prisma.teacher.findMany({
       where: { schoolId: tenantId },
       include: {
-        user: { select: { email: true } },
+        user: { select: { email: true, role: true, isActive: true } },
         arms: {
           where: { schoolId: tenantId },
           include: { class: true },
@@ -40,25 +40,103 @@ export const teacherService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
+    console.log('🔍 teacherService.getById called with:', id);
+
     return prisma.teacher.findUnique({
       where: { id, schoolId: tenantId },
       include: {
-        user: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            role: true,
+            isActive: true,
+          }
+        },
         arms: {
           where: { schoolId: tenantId },
-          include: { class: true },
+          include: { 
+            class: {
+              select: {
+                id: true,
+                name: true,
+              }
+            }
+          },
         },
         subjectArms: {
           where: { schoolId: tenantId },
           include: {
-            subject: true,
+            subject: {
+              select: {
+                id: true,
+                name: true,
+              }
+            },
             arm: {
-              include: { class: true },
+              include: { 
+                class: {
+                  select: {
+                    name: true,
+                  }
+                }
+              },
             },
           },
         },
       },
     });
+  },
+
+  /**
+   * Get a teacher by userId (for class service and auth).
+   * @param userId - The user ID from the User table
+   * @returns The teacher with basic info
+   */
+  getByUserId: async (userId: string) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    console.log('🔍 teacherService.getByUserId called with userId:', userId);
+
+    if (!userId) {
+      console.log('❌ No userId provided to getByUserId');
+      return null;
+    }
+
+    try {
+      const teacher = await prisma.teacher.findUnique({
+        where: { userId: userId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          schoolId: true,
+          isActive: true,
+          userId: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              role: true,
+              isActive: true,
+            }
+          }
+        }
+      });
+
+      if (teacher) {
+        console.log('✅ Teacher found:', teacher.name, 'Teacher ID:', teacher.id);
+      } else {
+        console.log('❌ No teacher found for userId:', userId);
+      }
+
+      return teacher;
+    } catch (error) {
+      console.error('❌ Error in getByUserId:', error);
+      throw error;
+    }
   },
 
   /**
@@ -69,6 +147,8 @@ export const teacherService = {
   create: async (data: { name: string; email: string; phone?: string; userId?: string }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
+
+    console.log('🔍 Creating new teacher with data:', data);
 
     let userId = data.userId;
     if (!userId) {
@@ -85,9 +165,10 @@ export const teacherService = {
         },
       });
       userId = user.id;
+      console.log('✅ Created new user for teacher:', userId);
     }
 
-    return prisma.teacher.create({
+    const teacher = await prisma.teacher.create({
       data: {
         name: data.name,
         email: data.email,
@@ -96,7 +177,14 @@ export const teacherService = {
         schoolId: tenantId,
       },
       include: {
-        user: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            role: true,
+            isActive: true,
+          }
+        },
         arms: {
           where: { schoolId: tenantId },
           include: { class: true },
@@ -107,6 +195,9 @@ export const teacherService = {
         },
       },
     });
+
+    console.log('✅ Teacher created:', teacher.name);
+    return teacher;
   },
 
   /**
@@ -120,11 +211,16 @@ export const teacherService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
+    console.log('🔍 Updating teacher:', id, data);
+
     const teacher = await prisma.teacher.findUnique({
       where: { id, schoolId: tenantId },
       include: { user: true },
     });
-    if (!teacher) throw new Error('Teacher not found');
+    if (!teacher) {
+      console.log('❌ Teacher not found for update:', id);
+      throw new Error('Teacher not found');
+    }
 
     const updatedTeacher = await prisma.teacher.update({
       where: { id, schoolId: tenantId },
@@ -135,7 +231,14 @@ export const teacherService = {
         isActive: data.isActive,
       },
       include: {
-        user: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            role: true,
+            isActive: true,
+          }
+        },
         arms: {
           where: { schoolId: tenantId },
           include: { class: true },
@@ -157,8 +260,10 @@ export const teacherService = {
           isActive: data.isActive,
         },
       });
+      console.log('✅ User record synced for teacher:', teacher.userId);
     }
 
+    console.log('✅ Teacher updated:', updatedTeacher.name);
     return updatedTeacher;
   },
 
@@ -170,6 +275,8 @@ export const teacherService = {
   delete: async (id: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
+
+    console.log('🔍 Deleting teacher:', id);
 
     return prisma.teacher.delete({
       where: { id, schoolId: tenantId },
@@ -186,17 +293,26 @@ export const teacherService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
+    console.log('🔍 Resetting password for teacher:', id);
+
     const teacher = await prisma.teacher.findUnique({
       where: { id, schoolId: tenantId },
       include: { user: true },
     });
-    if (!teacher) throw new Error('Teacher not found');
+    if (!teacher) {
+      console.log('❌ Teacher not found for password reset:', id);
+      throw new Error('Teacher not found');
+    }
+    
     const newPassword = Math.random().toString(36).slice(-8);
     const hashed = await bcrypt.hash(newPassword, 10);
+    
     await prisma.user.update({
       where: { id: teacher.userId, schoolId: tenantId },
       data: { password: hashed },
     });
+    
+    console.log('✅ Password reset for teacher:', teacher.name);
     return newPassword;
   },
 };
