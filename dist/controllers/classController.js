@@ -45,28 +45,47 @@ exports.classController = {
     /**
      * GET /api/classes/teacher/classes
      * Returns all classes assigned to the authenticated teacher
+     * First finds the teacher by userId, then fetches their classes
      * Only returns arms where the teacher is assigned
      */
     getTeacherClasses: async (req, res) => {
         try {
-            const teacherId = req.user.id; // Assuming the authenticated user is the teacher
+            const userId = req.user.id; // This is the User ID from the auth token
+            console.log('🔍 getTeacherClasses called with userId:', userId);
             
-            if (!teacherId) {
-                return res.status(401).json({ error: 'Unauthorized - Teacher ID not found' });
+            if (!userId) {
+                return res.status(401).json({ error: 'Unauthorized - User ID not found' });
             }
 
+            // First, find the teacher record using the userId
+            const teacher = await db_1.default.teacher.findUnique({
+                where: { userId: userId },
+                select: { id: true, name: true }
+            });
+
+            if (!teacher) {
+                console.log('❌ Teacher record not found for user:', userId);
+                return res.status(404).json({ 
+                    error: 'Teacher profile not found',
+                    message: 'No teacher profile exists for this user. Please contact your administrator.'
+                });
+            }
+
+            console.log('✅ Teacher found:', teacher.name, 'Teacher ID:', teacher.id);
+
+            // Now fetch classes for this teacher using the teacher's ID
             const classes = await db_1.default.class.findMany({
                 where: {
                     arms: {
                         some: {
-                            teacherId: teacherId
+                            teacherId: teacher.id // Use the teacher's ID, not the user ID
                         }
                     }
                 },
                 include: {
                     arms: {
                         where: {
-                            teacherId: teacherId // Only return arms the teacher is assigned to
+                            teacherId: teacher.id // Only return arms the teacher is assigned to
                         },
                         include: {
                             teacher: {
@@ -93,10 +112,14 @@ exports.classController = {
                 },
             });
 
+            console.log('📚 Classes found for teacher:', classes.length);
             res.json(classes);
         } catch (err) {
-            console.error('Get teacher classes error:', err);
-            res.status(500).json({ error: 'Failed to fetch teacher classes' });
+            console.error('❌ Get teacher classes error:', err);
+            res.status(500).json({ 
+                error: 'Failed to fetch teacher classes',
+                details: err.message 
+            });
         }
     },
 

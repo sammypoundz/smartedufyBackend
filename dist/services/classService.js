@@ -27,27 +27,43 @@ exports.classService = {
     }), // middleware adds schoolId
 
     /**
-     * Get classes assigned to a specific teacher.
+     * Get classes assigned to a specific teacher by userId.
+     * First finds the teacher record using the userId, then fetches classes.
      * Returns only classes where the teacher is assigned to at least one arm.
      * Only includes arms where the teacher is assigned.
      */
-    getTeacherClasses: async (teacherId) => {
+    getTeacherClasses: async (userId) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId) throw new Error('Tenant context missing');
         
-        return db_1.default.class.findMany({
+        console.log('🔍 getTeacherClasses called with userId:', userId);
+        
+        // First, find the teacher record using the userId
+        const teacher = await db_1.default.teacher.findUnique({
+            where: { userId: userId },
+            select: { id: true, name: true, schoolId: true }
+        });
+        
+        if (!teacher) {
+            console.log('❌ Teacher record not found for user:', userId);
+            return [];
+        }
+        
+        console.log('✅ Teacher found:', teacher.name, 'Teacher ID:', teacher.id);
+        
+        const classes = await db_1.default.class.findMany({
             where: {
                 schoolId: tenantId,
                 arms: {
                     some: {
-                        teacherId: teacherId,
+                        teacherId: teacher.id, // Use the teacher's ID, not the user ID
                     },
                 },
             },
             include: {
                 arms: {
                     where: {
-                        teacherId: teacherId, // Only return arms the teacher is assigned to
+                        teacherId: teacher.id, // Only return arms the teacher is assigned to
                     },
                     include: {
                         teacher: {
@@ -73,6 +89,9 @@ exports.classService = {
                 name: 'asc',
             },
         });
+        
+        console.log('📚 Classes found for teacher:', classes.length);
+        return classes;
     },
 
     /**

@@ -7,18 +7,19 @@ exports.teacherService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const tenantContext_1 = require("../utils/tenantContext");
+
 exports.teacherService = {
     /**
      * Get all teachers with their user email, assigned arms (with class), and subjects taught (with arm & class).
      */
     getAll: async () => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId)
-            throw new Error('Tenant context missing');
+        if (!tenantId) throw new Error('Tenant context missing');
+        
         return db_1.default.teacher.findMany({
             where: { schoolId: tenantId },
             include: {
-                user: { select: { email: true } },
+                user: { select: { email: true, role: true, isActive: true } },
                 arms: {
                     where: { schoolId: tenantId },
                     include: { class: true },
@@ -36,34 +37,143 @@ exports.teacherService = {
             orderBy: { name: 'asc' },
         });
     },
+
     /**
-     * Get a single teacher by ID, including all relations.
-     * @param id - Teacher ID
+     * Get a single teacher by ID or userId.
+     * First tries to find by teacher ID, then by userId.
+     * @param id - Teacher ID or User ID
+     * @returns The teacher with all relations, or null if not found.
      */
     getById: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId)
-            throw new Error('Tenant context missing');
-        return db_1.default.teacher.findUnique({
+        if (!tenantId) throw new Error('Tenant context missing');
+        
+        console.log('🔍 teacherService.getById called with:', id);
+        
+        // First try to find by teacher ID
+        let teacher = await db_1.default.teacher.findUnique({
             where: { id, schoolId: tenantId },
             include: {
-                user: true,
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        role: true,
+                        isActive: true,
+                    }
+                },
                 arms: {
                     where: { schoolId: tenantId },
-                    include: { class: true },
+                    include: { 
+                        class: {
+                            select: {
+                                id: true,
+                                name: true,
+                            }
+                        }
+                    },
                 },
                 subjectArms: {
                     where: { schoolId: tenantId },
                     include: {
-                        subject: true,
+                        subject: {
+                            select: {
+                                id: true,
+                                name: true,
+                            }
+                        },
                         arm: {
-                            include: { class: true },
+                            include: { 
+                                class: {
+                                    select: {
+                                        name: true,
+                                    }
+                                }
+                            },
                         },
                     },
                 },
             },
         });
+
+        // If not found by teacher ID, try by userId
+        if (!teacher) {
+            console.log('🔍 Teacher not found by ID, trying by userId:', id);
+            teacher = await db_1.default.teacher.findUnique({
+                where: { userId: id },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            email: true,
+                            role: true,
+                            isActive: true,
+                        }
+                    },
+                    arms: {
+                        where: { schoolId: tenantId },
+                        include: { 
+                            class: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                }
+                            }
+                        },
+                    },
+                    subjectArms: {
+                        where: { schoolId: tenantId },
+                        include: {
+                            subject: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                }
+                            },
+                            arm: {
+                                include: { 
+                                    class: {
+                                        select: {
+                                            name: true,
+                                        }
+                                    }
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        if (teacher) {
+            console.log('✅ Teacher found:', teacher.name);
+        } else {
+            console.log('❌ Teacher not found for identifier:', id);
+        }
+
+        return teacher;
     },
+
+    /**
+     * Get a teacher by userId only (for class service)
+     * @param userId - The user ID
+     * @returns The teacher with basic info
+     */
+    getByUserId: async (userId) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId) throw new Error('Tenant context missing');
+        
+        return db_1.default.teacher.findUnique({
+            where: { userId: userId },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                schoolId: true,
+            }
+        });
+    },
+
     /**
      * Create a new teacher. Automatically creates a User account for them.
      * @param data - Teacher data (name, email, phone, optional userId)
@@ -71,12 +181,14 @@ exports.teacherService = {
      */
     create: async (data) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId)
-            throw new Error('Tenant context missing');
+        if (!tenantId) throw new Error('Tenant context missing');
+        
         let userId = data.userId;
+        
         if (!userId) {
             const tempPassword = Math.random().toString(36).slice(-8);
             const hashedPassword = await bcryptjs_1.default.hash(tempPassword, 10);
+            
             const user = await db_1.default.user.create({
                 data: {
                     name: data.name,
@@ -89,6 +201,7 @@ exports.teacherService = {
             });
             userId = user.id;
         }
+
         return db_1.default.teacher.create({
             data: {
                 name: data.name,
@@ -98,18 +211,31 @@ exports.teacherService = {
                 schoolId: tenantId,
             },
             include: {
-                user: true,
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        role: true,
+                        isActive: true,
+                    }
+                },
                 arms: {
                     where: { schoolId: tenantId },
                     include: { class: true },
                 },
                 subjectArms: {
                     where: { schoolId: tenantId },
-                    include: { subject: true, arm: { include: { class: true } } },
+                    include: { 
+                        subject: true, 
+                        arm: { 
+                            include: { class: true } 
+                        } 
+                    },
                 },
             },
         });
     },
+
     /**
      * Update an existing teacher.
      * Also syncs changes to the associated User record (name, email, isActive).
@@ -119,14 +245,15 @@ exports.teacherService = {
      */
     update: async (id, data) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId)
-            throw new Error('Tenant context missing');
+        if (!tenantId) throw new Error('Tenant context missing');
+        
         const teacher = await db_1.default.teacher.findUnique({
             where: { id, schoolId: tenantId },
             include: { user: true },
         });
-        if (!teacher)
-            throw new Error('Teacher not found');
+        
+        if (!teacher) throw new Error('Teacher not found');
+
         const updatedTeacher = await db_1.default.teacher.update({
             where: { id, schoolId: tenantId },
             data: {
@@ -136,17 +263,30 @@ exports.teacherService = {
                 isActive: data.isActive,
             },
             include: {
-                user: true,
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        role: true,
+                        isActive: true,
+                    }
+                },
                 arms: {
                     where: { schoolId: tenantId },
                     include: { class: true },
                 },
                 subjectArms: {
                     where: { schoolId: tenantId },
-                    include: { subject: true, arm: { include: { class: true } } },
+                    include: { 
+                        subject: true, 
+                        arm: { 
+                            include: { class: true } 
+                        } 
+                    },
                 },
             },
         });
+
         // Sync changes to the associated User record
         if (data.name || data.email || data.isActive !== undefined) {
             await db_1.default.user.update({
@@ -158,8 +298,10 @@ exports.teacherService = {
                 },
             });
         }
+
         return updatedTeacher;
     },
+
     /**
      * Delete a teacher.
      * @param id - Teacher ID
@@ -167,12 +309,13 @@ exports.teacherService = {
      */
     delete: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId)
-            throw new Error('Tenant context missing');
+        if (!tenantId) throw new Error('Tenant context missing');
+        
         return db_1.default.teacher.delete({
             where: { id, schoolId: tenantId },
         });
     },
+
     /**
      * Reset a teacher's password.
      * Generates a random password, hashes it, updates the associated User, and returns the plain password.
@@ -181,20 +324,23 @@ exports.teacherService = {
      */
     resetPassword: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-        if (!tenantId)
-            throw new Error('Tenant context missing');
+        if (!tenantId) throw new Error('Tenant context missing');
+        
         const teacher = await db_1.default.teacher.findUnique({
             where: { id, schoolId: tenantId },
             include: { user: true },
         });
-        if (!teacher)
-            throw new Error('Teacher not found');
+        
+        if (!teacher) throw new Error('Teacher not found');
+
         const newPassword = Math.random().toString(36).slice(-8);
         const hashed = await bcryptjs_1.default.hash(newPassword, 10);
+        
         await db_1.default.user.update({
             where: { id: teacher.userId, schoolId: tenantId },
             data: { password: hashed },
         });
+        
         return newPassword;
     },
 };
