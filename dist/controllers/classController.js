@@ -9,6 +9,7 @@ const armService_1 = require("../services/armService");
 const classValidation_1 = require("../validations/classValidation");
 const paramUtils_1 = require("../utils/paramUtils");
 const db_1 = __importDefault(require("../config/db"));
+
 exports.classController = {
     /**
      * GET /api/classes
@@ -40,14 +41,72 @@ exports.classController = {
             res.status(500).json({ error: 'Failed to fetch classes' });
         }
     },
+
+    /**
+     * GET /api/classes/teacher/classes
+     * Returns all classes assigned to the authenticated teacher
+     * Only returns arms where the teacher is assigned
+     */
+    getTeacherClasses: async (req, res) => {
+        try {
+            const teacherId = req.user.id; // Assuming the authenticated user is the teacher
+            
+            if (!teacherId) {
+                return res.status(401).json({ error: 'Unauthorized - Teacher ID not found' });
+            }
+
+            const classes = await db_1.default.class.findMany({
+                where: {
+                    arms: {
+                        some: {
+                            teacherId: teacherId
+                        }
+                    }
+                },
+                include: {
+                    arms: {
+                        where: {
+                            teacherId: teacherId // Only return arms the teacher is assigned to
+                        },
+                        include: {
+                            teacher: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    email: true,
+                                    phone: true,
+                                },
+                            },
+                            _count: {
+                                select: {
+                                    students: true,
+                                },
+                            },
+                        },
+                        orderBy: {
+                            letter: 'asc',
+                        },
+                    },
+                },
+                orderBy: {
+                    name: 'asc',
+                },
+            });
+
+            res.json(classes);
+        } catch (err) {
+            console.error('Get teacher classes error:', err);
+            res.status(500).json({ error: 'Failed to fetch teacher classes' });
+        }
+    },
+
     /**
      * GET /api/classes/:id
      * Returns a single class with arms, teacher details, and student count.
      */
     getById: async (req, res) => {
         const id = (0, paramUtils_1.getStringParam)(req.params.id);
-        if (!id)
-            return res.status(400).json({ error: 'Invalid id' });
+        if (!id) return res.status(400).json({ error: 'Invalid id' });
         try {
             const cls = await db_1.default.class.findUnique({
                 where: { id },
@@ -65,8 +124,7 @@ exports.classController = {
                     // students: true, // removed – not needed for the class detail view
                 },
             });
-            if (!cls)
-                return res.status(404).json({ error: 'Class not found' });
+            if (!cls) return res.status(404).json({ error: 'Class not found' });
             res.json(cls);
         }
         catch (err) {
@@ -74,14 +132,14 @@ exports.classController = {
             res.status(500).json({ error: 'Failed to fetch class' });
         }
     },
+
     /**
      * GET /api/classes/:classId/arms
      * Returns all arms for a given class (uses armService, already correct).
      */
     getArmsByClassId: async (req, res) => {
         const classId = (0, paramUtils_1.getStringParam)(req.params.classId);
-        if (!classId)
-            return res.status(400).json({ error: 'Invalid classId' });
+        if (!classId) return res.status(400).json({ error: 'Invalid classId' });
         try {
             const arms = await armService_1.armService.getByClassId(classId);
             res.json(arms);
@@ -91,6 +149,7 @@ exports.classController = {
             res.status(500).json({ error: 'Failed to fetch arms for class' });
         }
     },
+
     /**
      * POST /api/classes
      * Create a new class (admin only)
@@ -109,18 +168,17 @@ exports.classController = {
             res.status(500).json({ error: 'Failed to create class' });
         }
     },
+
     /**
      * PUT /api/classes/:id
      * Update a class name (admin only)
      */
     update: async (req, res) => {
         const id = (0, paramUtils_1.getStringParam)(req.params.id);
-        if (!id)
-            return res.status(400).json({ error: 'Invalid id' });
+        if (!id) return res.status(400).json({ error: 'Invalid id' });
         try {
             const { name } = classValidation_1.updateClassSchema.parse(req.body);
-            if (!name)
-                return res.status(400).json({ error: 'Name is required' });
+            if (!name) return res.status(400).json({ error: 'Name is required' });
             const updated = await classService_1.classService.update(id, name);
             res.json(updated);
         }
@@ -132,14 +190,14 @@ exports.classController = {
             res.status(500).json({ error: 'Failed to update class' });
         }
     },
+
     /**
      * DELETE /api/classes/:id
      * Delete a class (admin only)
      */
     delete: async (req, res) => {
         const id = (0, paramUtils_1.getStringParam)(req.params.id);
-        if (!id)
-            return res.status(400).json({ error: 'Invalid id' });
+        if (!id) return res.status(400).json({ error: 'Invalid id' });
         try {
             await classService_1.classService.delete(id);
             res.json({ message: 'Class deleted' });
