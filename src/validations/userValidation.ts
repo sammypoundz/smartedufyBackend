@@ -6,6 +6,7 @@ export const createUserSchema = z.object({
   password: z.string().min(6),
   role: z.enum(['ADMIN', 'TEACHER', 'PARENT', 'STUDENT', 'PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN']),
   isActive: z.boolean().default(true),
+  roles: z.array(z.string()).default([]),
   allowedPages: z.array(z.string()).default([]),
 });
 
@@ -15,6 +16,7 @@ export const updateUserSchema = z.object({
   password: z.string().min(6).optional(),
   role: z.enum(['ADMIN', 'TEACHER', 'PARENT', 'STUDENT', 'PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN']).optional(),
   isActive: z.boolean().optional(),
+  roles: z.array(z.string()).optional(),
   allowedPages: z.array(z.string()).optional(),
 });
 

@@ -1,5 +1,6 @@
 import prisma from '../config/db';
 import { getCurrentTenantId } from '../utils/tenantContext';
+import { syncService } from './syncService';
 
 export const armService = {
   // Get all arms for a specific class, including teacher, students (with parent), subjects, and skills
@@ -97,7 +98,22 @@ export const armService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.subjectArm.create({
+    // Integrity: validate all referenced entities belong to this school
+    await syncService.validateSubjectArmLink(tenantId, subjectId, armId, teacherId);
+
+    // Idempotent link: never create duplicates
+    const existing = await prisma.subjectArm.findFirst({
+      where: { armId, subjectId, schoolId: tenantId },
+    });
+    if (existing) {
+      return prisma.subjectArm.update({
+        where: { id: existing.id, schoolId: tenantId },
+        data: { teacherId: teacherId ?? existing.teacherId },
+        include: { subject: true, teacher: true },
+      });
+    }
+
+    const link = await prisma.subjectArm.create({
       data: {
         armId,
         subjectId,
@@ -106,6 +122,14 @@ export const armService = {
       },
       include: { subject: true, teacher: true },
     });
+
+    // Keep SubjectTeacher join table in sync
+    if (teacherId) {
+      await syncService.ensureSubjectTeacher(prisma, tenantId, subjectId, teacherId);
+    }
+    // Enroll students of this arm into the newly offered subject
+    await syncService.syncStudentSubjectsForArm(tenantId, armId);
+    return link;
   },
 
   // Add a skill to an arm
@@ -160,11 +184,25 @@ export const armService = {
     });
     if (!relation) return null;
 
-    return prisma.subjectArm.update({
+    if (teacherId) {
+      const teacher = await prisma.teacher.findFirst({ where: { id: teacherId, schoolId: tenantId } });
+      if (!teacher) throw new Error('Teacher not found in this school');
+    }
+
+    const updated = await prisma.subjectArm.update({
       where: { id: relation.id, schoolId: tenantId },
       data: { teacherId: teacherId || null },
       include: { subject: true, teacher: true },
     });
+
+    // Sync SubjectTeacher join table both ways (add new, prune old)
+    if (teacherId) {
+      await syncService.ensureSubjectTeacher(prisma, tenantId, subjectId, teacherId);
+    }
+    if (relation.teacherId && relation.teacherId !== teacherId) {
+      await syncService.pruneSubjectTeachers(prisma, tenantId, subjectId, relation.teacherId);
+    }
+    return updated;
   },
 
   // Remove a subject from an arm (by armId and subjectId)
@@ -177,9 +215,19 @@ export const armService = {
     });
     if (!relation) return null;
 
-    return prisma.subjectArm.delete({
+    const removed = await prisma.subjectArm.delete({
       where: { id: relation.id, schoolId: tenantId },
     });
+
+    // Prune now-orphaned SubjectTeacher link
+    if (relation.teacherId) {
+      await syncService.pruneSubjectTeachers(prisma, tenantId, subjectId, relation.teacherId);
+    }
+    // Un-enroll students of this arm from the removed subject
+    await prisma.studentSubject.deleteMany({
+      where: { schoolId: tenantId, subjectId, student: { armId } },
+    });
+    return removed;
   },
 
   // Delete a subject-arm relation directly by its ID (used to remove a subject from a teacher)
@@ -187,9 +235,20 @@ export const armService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.subjectArm.delete({
+    const relation = await prisma.subjectArm.findFirst({
       where: { id, schoolId: tenantId },
     });
+    if (!relation) throw new Error('Subject-arm relation not found');
+
+    const removed = await prisma.subjectArm.delete({ where: { id, schoolId: tenantId } });
+
+    if (relation.teacherId) {
+      await syncService.pruneSubjectTeachers(prisma, tenantId, relation.subjectId, relation.teacherId);
+    }
+    await prisma.studentSubject.deleteMany({
+      where: { schoolId: tenantId, subjectId: relation.subjectId, student: { armId: relation.armId } },
+    });
+    return removed;
   },
 
   // ---------- Methods for student management (results page) ----------

@@ -9,6 +9,7 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const prisma_1 = require("../config/prisma");
 const authValidation_1 = require("../validations/authValidation");
 const auth_1 = require("../middleware/auth");
+const roles_1 = require("./roles");
 const router = (0, express_1.Router)();
 // Register a new user (staff/admin – not for students)
 router.post('/register', async (req, res, next) => {
@@ -23,53 +24,58 @@ router.post('/register', async (req, res, next) => {
         if (!school) {
             return res.status(400).json({ error: 'Invalid school' });
         }
-        const user = await prisma_1.prisma.user.create({
-            data: {
-                name: data.name,
-                email: data.email,
-                password: hashedPassword,
-                role: data.role,
-                isActive: true,
-                schoolId,
-            },
+        // Create the user and their role-specific profile record atomically
+        // so all necessary tables are populated together.
+        const user = await prisma_1.prisma.$transaction(async (tx) => {
+            const createdUser = await tx.user.create({
+                data: {
+                    name: data.name,
+                    email: data.email,
+                    password: hashedPassword,
+                    role: data.role,
+                    isActive: true,
+                    schoolId,
+                },
+            });
+            if (data.role === 'STUDENT') {
+                await tx.student.create({
+                    data: {
+                        userId: createdUser.id,
+                        name: data.name,
+                        gender: data.gender || '',
+                        dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
+                        address: data.address,
+                        classId: data.classId || '',
+                        armId: data.armId || '',
+                        schoolId,
+                    },
+                });
+            }
+            else if (data.role === 'TEACHER') {
+                await tx.teacher.create({
+                    data: {
+                        userId: createdUser.id,
+                        name: data.name,
+                        email: data.email,
+                        phone: data.phone || '',
+                        schoolId,
+                    },
+                });
+            }
+            else if (data.role === 'PARENT') {
+                await tx.parent.create({
+                    data: {
+                        userId: createdUser.id,
+                        name: data.name,
+                        email: data.email,
+                        phone: data.phone || '',
+                        schoolId,
+                    },
+                });
+            }
+            return createdUser;
         });
-        if (data.role === 'STUDENT') {
-            await prisma_1.prisma.student.create({
-                data: {
-                    userId: user.id,
-                    name: data.name,
-                    gender: data.gender || '',
-                    dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
-                    address: data.address,
-                    classId: data.classId || '',
-                    armId: data.armId || '',
-                    schoolId,
-                },
-            });
-        }
-        else if (data.role === 'TEACHER') {
-            await prisma_1.prisma.teacher.create({
-                data: {
-                    userId: user.id,
-                    name: data.name,
-                    email: data.email,
-                    phone: data.phone || '',
-                    schoolId,
-                },
-            });
-        }
-        else if (data.role === 'PARENT') {
-            await prisma_1.prisma.parent.create({
-                data: {
-                    userId: user.id,
-                    name: data.name,
-                    email: data.email,
-                    phone: data.phone || '',
-                    schoolId,
-                },
-            });
-        }
-        const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role, schoolId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role, roles: user.roles || [user.role], schoolId }, process.env.JWT_SECRET, { expiresIn: '7d' });
         res.status(201).json({
             token,
             user: {
@@ -77,8 +83,10 @@ router.post('/register', async (req, res, next) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
+                roles: user.roles || [user.role],
                 isActive: user.isActive,
                 schoolId,
+                allowedPages: user.allowedPages || [],
             },
         });
     }
@@ -113,7 +121,16 @@ router.post('/login', async (req, res, next) => {
         if (!user.isActive) {
             return res.status(403).json({ error: 'Your account is inactive. Contact admin.' });
         }
-        const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role, schoolId: user.schoolId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        // Normalize roles: always include the legacy primary role
+        const roles = Array.from(new Set([...(user.roles || []), user.role]));
+        const privileges = await (0, roles_1.resolvePrivileges)(user.schoolId, roles);
+        const token = jsonwebtoken_1.default.sign({
+            id: user.id,
+            role: user.role,
+            roles,
+            privileges,
+            schoolId: user.schoolId,
+        }, process.env.JWT_SECRET, { expiresIn: '7d' });
         res.json({
             token,
             user: {
@@ -121,8 +138,11 @@ router.post('/login', async (req, res, next) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
+                roles,
+                privileges,
                 isActive: user.isActive,
                 schoolId: user.schoolId,
+                allowedPages: user.allowedPages || [],
             },
         });
     }

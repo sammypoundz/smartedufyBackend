@@ -42,4 +42,16 @@ router.put('/security', roleGuard(['ADMIN']), settingsController.updateSecurityS
 router.get('/backup', settingsController.getBackupSettings);
 router.put('/backup', roleGuard(['ADMIN']), settingsController.updateBackupSettings);
 
+// Data integrity: audit & repair subject/teacher/class/student assignment links
+router.post('/reconcile-data', roleGuard(['ADMIN']), async (req, res) => {
+  try {
+    const { syncService } = await import('../services/syncService');
+    const report = await syncService.reconcileAll();
+    res.json({ message: 'Data reconciliation complete', report });
+  } catch (err: any) {
+    console.error('Reconcile data error:', err);
+    res.status(500).json({ error: err.message || 'Failed to reconcile data' });
+  }
+});
+
 export default router;

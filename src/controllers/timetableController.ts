@@ -89,9 +89,12 @@ export const timetableController = {
         id: entry.id,
         dayOfWeek: entry.dayOfWeek,
         timeSlot: entry.timeSlot,
-        subject: { name: entry.subject?.name || 'Unknown' },
+        startTime: entry.timeSlot,
+        subject: { id: entry.subjectId, name: entry.subject?.name || 'Unknown' },
         arm: {
+          id: entry.armId,
           letter: entry.arm?.letter || '',
+          alias: entry.arm?.alias || entry.arm?.letter || '',
           class: entry.arm?.class ? { name: entry.arm.class.name } : undefined,
         },
       }));

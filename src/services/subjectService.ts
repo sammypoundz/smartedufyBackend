@@ -1,5 +1,6 @@
 import prisma from '../config/db';
 import { getCurrentTenantId } from '../utils/tenantContext';
+import { syncService } from './syncService';
 
 function getGradeLetterFromScales(score: number, scales: { minScore: number; maxScore: number; grade: string }[]): string {
   for (const scale of scales) {
@@ -117,47 +118,92 @@ export const subjectService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.subjectArm.create({
-      data: {
-        subjectId,
-        armId,
-        teacherId,
-        schoolId: tenantId,
-      },
+    await syncService.validateSubjectArmLink(tenantId, subjectId, armId, teacherId);
+
+    // Idempotent: never duplicate a subject-arm link
+    const existing = await prisma.subjectArm.findFirst({
+      where: { schoolId: tenantId, subjectId, armId },
     });
+    let link;
+    if (existing) {
+      link = await prisma.subjectArm.update({
+        where: { id: existing.id, schoolId: tenantId },
+        data: { teacherId: teacherId ?? existing.teacherId },
+      });
+    } else {
+      link = await prisma.subjectArm.create({
+        data: { subjectId, armId, teacherId, schoolId: tenantId },
+      });
+    }
+    if (teacherId) {
+      await syncService.ensureSubjectTeacher(prisma, tenantId, subjectId, teacherId);
+    }
+    await syncService.syncStudentSubjectsForArm(tenantId, armId);
+    return link;
   },
 
   updateArmSubject: async (id: string, teacherId?: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.subjectArm.update({
+    if (teacherId) {
+      const teacher = await prisma.teacher.findFirst({ where: { id: teacherId, schoolId: tenantId } });
+      if (!teacher) throw new Error('Teacher not found in this school');
+    }
+
+    const previous = await prisma.subjectArm.findFirst({ where: { id, schoolId: tenantId } });
+    const updated = await prisma.subjectArm.update({
       where: { id, schoolId: tenantId },
       data: { teacherId },
       include: { subject: true, teacher: true },
     });
+
+    if (teacherId) {
+      await syncService.ensureSubjectTeacher(prisma, tenantId, updated.subjectId, teacherId);
+    }
+    if (previous?.teacherId && previous.teacherId !== teacherId) {
+      await syncService.pruneSubjectTeachers(prisma, tenantId, previous.subjectId, previous.teacherId);
+    }
+    return updated;
   },
 
   removeFromArm: async (armId: string, subjectId: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.subjectArm.deleteMany({
-      where: {
-        armId,
-        subjectId,
-        schoolId: tenantId,
-      },
+    const relations = await prisma.subjectArm.findMany({
+      where: { armId, subjectId, schoolId: tenantId },
     });
+    const removed = await prisma.subjectArm.deleteMany({
+      where: { armId, subjectId, schoolId: tenantId },
+    });
+
+    for (const r of relations) {
+      if (r.teacherId) {
+        await syncService.pruneSubjectTeachers(prisma, tenantId, subjectId, r.teacherId);
+      }
+    }
+    await prisma.studentSubject.deleteMany({
+      where: { schoolId: tenantId, subjectId, student: { armId } },
+    });
+    return removed;
   },
 
   deleteSubjectArm: async (id: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    return prisma.subjectArm.delete({
-      where: { id, schoolId: tenantId },
-    });
+    const relation = await prisma.subjectArm.findFirst({ where: { id, schoolId: tenantId } });
+    const removed = await prisma.subjectArm.delete({ where: { id, schoolId: tenantId } });
+    if (relation?.teacherId) {
+      await syncService.pruneSubjectTeachers(prisma, tenantId, relation.subjectId, relation.teacherId);
+    }
+    if (relation) {
+      await prisma.studentSubject.deleteMany({
+        where: { schoolId: tenantId, subjectId: relation.subjectId, student: { armId: relation.armId } },
+      });
+    }
+    return removed;
   },
 
   // ---------- Curriculum (topics) – full CRUD ----------

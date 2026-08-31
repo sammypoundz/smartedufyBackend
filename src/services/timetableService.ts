@@ -11,9 +11,18 @@ export const timetableService = {
     }); // middleware adds schoolId
   },
 
-  getByTeacherId: async (teacherId: string) => {
+  getByTeacherId: async (teacherIdOrUserId: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
+
+    // The caller may pass either the Teacher profile id or the User id
+    // (e.g. from the JWT). Resolve to the actual Teacher profile id.
+    let teacherId = teacherIdOrUserId;
+    const teacher = await prisma.teacher.findFirst({
+      where: { schoolId: tenantId, OR: [{ id: teacherIdOrUserId }, { userId: teacherIdOrUserId }] },
+      select: { id: true },
+    });
+    if (teacher) teacherId = teacher.id;
 
     const teacherSubjects = await prisma.subjectArm.findMany({
       where: { teacherId, schoolId: tenantId },

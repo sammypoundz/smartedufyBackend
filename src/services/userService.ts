@@ -27,6 +27,7 @@ export const userService = {
         name,
         email: user.email,
         role: user.role,
+        roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
         isActive: user.isActive,
         allowedPages: user.allowedPages || [],
         createdAt: user.createdAt,
@@ -79,6 +80,7 @@ export const userService = {
       name,
       email: user.email,
       role: user.role,
+      roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
       isActive: user.isActive,
       allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,
@@ -91,6 +93,7 @@ export const userService = {
     password: string;
     role: string;
     isActive: boolean;
+    roles?: string[];
     allowedPages?: string[];
   }) => {
     const tenantId = getCurrentTenantId();
@@ -101,12 +104,13 @@ export const userService = {
     // Create the user AND its role-specific profile row atomically so all
     // necessary tables are populated (data integrity).
     const user = await prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
+        const created = await tx.user.create({
         data: {
           name: data.name,
           email: data.email,
           password: hashedPassword,
           role: data.role as any,
+          roles: data.roles?.length ? data.roles : [data.role].filter(Boolean),
           isActive: data.isActive,
           allowedPages: data.allowedPages || [],
           schoolId: tenantId, // 👈 required
@@ -166,6 +170,7 @@ export const userService = {
       name: displayName,
       email: user.email,
       role: user.role,
+      roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
       isActive: user.isActive,
       allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,
@@ -178,6 +183,7 @@ export const userService = {
     password: string;
     role: string;
     isActive: boolean;
+    roles: string[];
     allowedPages: string[];
   }>) => {
     const tenantId = getCurrentTenantId();
@@ -209,7 +215,9 @@ export const userService = {
       name: displayName,
       email: user.email,
       role: user.role,
+      roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
       isActive: user.isActive,
+      allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,
     };
   },
@@ -286,6 +294,7 @@ export const userService = {
       name: displayName,
       email: user.email,
       role: user.role,
+      roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
       isActive: user.isActive,
       allowedPages: user.allowedPages || [],
       createdAt: user.createdAt,

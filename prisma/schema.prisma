@@ -18,6 +18,7 @@ model School {
 
   // Relations
   users              User[]
+  roles              RoleDef[]
   students           Student[]
   teachers           Teacher[]
   parents            Parent[]
@@ -55,76 +56,78 @@ model School {
   // NEW: Settings models
   promotionRules      PromotionRule[]
   reportCardTemplates ReportCardTemplate[]
-  bankDetail          BankDetail?     // one-to-one (unique constraint on schoolId)
+  bankDetail          BankDetail? // one-to-one (unique constraint on schoolId)
 }
 
 // ========== USER ==========
 model User {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String   @db.ObjectId
-  school    School   @relation(fields: [schoolId], references: [id])
-  name      String?
-  email     String   @unique
-  phone     String?
-  password  String
-  isActive  Boolean  @default(true)
-  role      Role     @default(STUDENT)
-  // Page privileges granted to this user (applies to TEACHER etc.)
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId     String   @db.ObjectId
+  school       School   @relation(fields: [schoolId], references: [id])
+  name         String?
+  email        String   @unique
+  phone        String?
+  password     String
+  isActive     Boolean  @default(true)
+  role         Role     @default(STUDENT)
+  // Multi-role support: all roles held by this user (system + custom).
+  roles        String[] @default([])
+  // Page privileges granted to this user directly (extra, on top of role privileges)
   allowedPages String[] @default([])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  student Student?
-  parent  Parent?
-  teacher Teacher?
+  student        Student?
+  parent         Parent?
+  teacher        Teacher?
   payrollEntries Payroll[]
-  messagesSent Message[] @relation("sender")
+  messagesSent   Message[] @relation("sender")
 
   @@map("users")
 }
 
 // ========== STUDENT ==========
 model Student {
-  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId             String   @db.ObjectId
-  school               School   @relation(fields: [schoolId], references: [id])
+  id                   String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId             String    @db.ObjectId
+  school               School    @relation(fields: [schoolId], references: [id])
   name                 String
   gender               String
   dateOfBirth          DateTime?
   address              String?
   admissionNumber      String?
-  classId              String?  @db.ObjectId
-  armId                String?  @db.ObjectId
-  parentId             String?  @db.ObjectId
+  classId              String?   @db.ObjectId
+  armId                String?   @db.ObjectId
+  parentId             String?   @db.ObjectId
   guardianRelationship String?
-  isActive             Boolean  @default(true)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  isActive             Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId
 
-  class Class? @relation(fields: [classId], references: [id])
-  arm   Arm?   @relation(fields: [armId], references: [id])
+  class  Class?  @relation(fields: [classId], references: [id])
+  arm    Arm?    @relation(fields: [armId], references: [id])
   parent Parent? @relation(fields: [parentId], references: [id])
 
-  attendance        Attendance[]
-  results           Result[]
-  studentSubjects   StudentSubject[]
-  promotionHistory  StudentPromotionHistory[]
-  testAttempts      TestAttempt[]
-  feePayments       FeePayment[]
-  assignedFees      StudentFee[]
+  attendance       Attendance[]
+  results          Result[]
+  studentSubjects  StudentSubject[]
+  promotionHistory StudentPromotionHistory[]
+  testAttempts     TestAttempt[]
+  feePayments      FeePayment[]
+  assignedFees     StudentFee[]
 }
 
 // ========== PARENT ==========
 model Parent {
-  id      String   @id @default(auto()) @map("_id") @db.ObjectId
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
   schoolId String  @db.ObjectId
   school   School  @relation(fields: [schoolId], references: [id])
-  name    String
-  phone   String?
-  email   String   @unique
+  name     String
+  phone    String?
+  email    String  @unique
 
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId
@@ -134,13 +137,13 @@ model Parent {
 
 // ========== TEACHER ==========
 model Teacher {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String   @db.ObjectId
-  school    School   @relation(fields: [schoolId], references: [id])
-  name      String
-  phone     String?
-  email     String   @unique
-  isActive  Boolean  @default(true)
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId String  @db.ObjectId
+  school   School  @relation(fields: [schoolId], references: [id])
+  name     String
+  phone    String?
+  email    String  @unique
+  isActive Boolean @default(true)
 
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId
@@ -173,16 +176,16 @@ model Arm {
   classId   String  @db.ObjectId
   teacherId String? @db.ObjectId
 
-  class   Class   @relation(fields: [classId], references: [id])
+  class   Class    @relation(fields: [classId], references: [id])
   teacher Teacher? @relation(fields: [teacherId], references: [id])
 
-  students     Student[]
-  subjects     SubjectArm[]
-  timetable    TimetableEntry[]
-  skills       ArmSkill[]
-  topics       Topic[]
-  lessonPlans  LessonPlan[]
-  results      Result[]
+  students       Student[]
+  subjects       SubjectArm[]
+  timetable      TimetableEntry[]
+  skills         ArmSkill[]
+  topics         Topic[]
+  lessonPlans    LessonPlan[]
+  results        Result[]
   fromPromotions StudentPromotionHistory[] @relation("fromArm")
   toPromotions   StudentPromotionHistory[] @relation("toArm")
   tests          Test[]
@@ -190,9 +193,9 @@ model Arm {
 
 // ========== SUBJECT ==========
 model Subject {
-  id          String  @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String  @db.ObjectId
-  school      School  @relation(fields: [schoolId], references: [id])
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String    @db.ObjectId
+  school      School    @relation(fields: [schoolId], references: [id])
   name        String
   description String?
   createdAt   DateTime? @default(now())
@@ -219,20 +222,24 @@ model SubjectTeacher {
 
   subject Subject @relation(fields: [subjectId], references: [id])
   teacher Teacher @relation(fields: [teacherId], references: [id])
+
+  @@unique([schoolId, subjectId, teacherId])
 }
 
 // ========== SUBJECT ARM (join) ==========
 model SubjectArm {
-  id        String @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String @db.ObjectId
-  school    School @relation(fields: [schoolId], references: [id])
-  subjectId String @db.ObjectId
-  armId     String @db.ObjectId
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String  @db.ObjectId
+  school    School  @relation(fields: [schoolId], references: [id])
+  subjectId String  @db.ObjectId
+  armId     String  @db.ObjectId
   teacherId String? @db.ObjectId
 
-  subject Subject @relation(fields: [subjectId], references: [id])
-  arm     Arm     @relation(fields: [armId], references: [id])
+  subject Subject  @relation(fields: [subjectId], references: [id])
+  arm     Arm      @relation(fields: [armId], references: [id])
   teacher Teacher? @relation(fields: [teacherId], references: [id])
+
+  @@unique([schoolId, subjectId, armId])
 }
 
 // ========== STUDENT SUBJECT (join) ==========
@@ -263,11 +270,11 @@ model Skill {
 
 // ========== ARM SKILL (join) ==========
 model ArmSkill {
-  id        String @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String @db.ObjectId
-  school    School @relation(fields: [schoolId], references: [id])
-  armId     String @db.ObjectId
-  skillId   String @db.ObjectId
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId String @db.ObjectId
+  school   School @relation(fields: [schoolId], references: [id])
+  armId    String @db.ObjectId
+  skillId  String @db.ObjectId
 
   arm   Arm   @relation(fields: [armId], references: [id])
   skill Skill @relation(fields: [skillId], references: [id])
@@ -305,15 +312,15 @@ model Attendance {
 
 // ========== TIMETABLE ENTRY ==========
 model TimetableEntry {
-  id        String @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String @db.ObjectId
-  school    School @relation(fields: [schoolId], references: [id])
-  armId     String @db.ObjectId
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String  @db.ObjectId
+  school    School  @relation(fields: [schoolId], references: [id])
+  armId     String  @db.ObjectId
   dayOfWeek String
   timeSlot  String
   subjectId String? @db.ObjectId
 
-  arm      Arm      @relation(fields: [armId], references: [id])
+  arm     Arm      @relation(fields: [armId], references: [id])
   subject Subject? @relation(fields: [subjectId], references: [id])
 
   @@unique([armId, dayOfWeek, timeSlot])
@@ -337,9 +344,9 @@ model Result {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  student      Student      @relation(fields: [studentId], references: [id])
-  subject      Subject      @relation(fields: [subjectId], references: [id])
-  arm          Arm          @relation(fields: [armId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  subject      Subject       @relation(fields: [subjectId], references: [id])
+  arm          Arm           @relation(fields: [armId], references: [id])
   academicYear AcademicYear? @relation(fields: [academicYearId], references: [id])
 
   @@unique([studentId, subjectId, armId, term, academicYearId])
@@ -376,17 +383,17 @@ model AssessmentFormat {
 
 // ========== TOPIC ==========
 model Topic {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String   @db.ObjectId
-  school      School   @relation(fields: [schoolId], references: [id])
-  subjectId   String   @db.ObjectId
-  armId       String   @db.ObjectId
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String    @db.ObjectId
+  school      School    @relation(fields: [schoolId], references: [id])
+  subjectId   String    @db.ObjectId
+  armId       String    @db.ObjectId
   title       String
   description String?
-  completed   Boolean  @default(false)
+  completed   Boolean   @default(false)
   dueDate     DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   subject Subject @relation(fields: [subjectId], references: [id])
   arm     Arm     @relation(fields: [armId], references: [id])
@@ -433,22 +440,22 @@ model FeeStructure {
 
 // ========== FEE PAYMENT ==========
 model FeePayment {
-  id               String           @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId         String           @db.ObjectId
-  school           School           @relation(fields: [schoolId], references: [id])
-  studentId        String           @db.ObjectId
-  feeStructureId   String           @db.ObjectId
-  amountPaid       Float
-  paymentDate      DateTime
-  reference        String?
-  paymentMethod    String
-  breakdownItems   Json
-  status           FeePaymentStatus @default(PAID)
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  id             String           @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String           @db.ObjectId
+  school         School           @relation(fields: [schoolId], references: [id])
+  studentId      String           @db.ObjectId
+  feeStructureId String           @db.ObjectId
+  amountPaid     Float
+  paymentDate    DateTime
+  reference      String?
+  paymentMethod  String
+  breakdownItems Json
+  status         FeePaymentStatus @default(PAID)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 
-  student      Student       @relation(fields: [studentId], references: [id])
-  feeStructure FeeStructure  @relation(fields: [feeStructureId], references: [id])
+  student      Student      @relation(fields: [studentId], references: [id])
+  feeStructure FeeStructure @relation(fields: [feeStructureId], references: [id])
 }
 
 enum FeePaymentStatus {
@@ -459,19 +466,19 @@ enum FeePaymentStatus {
 
 // ========== STUDENT FEE ==========
 model StudentFee {
-  id             String             @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String             @db.ObjectId
-  school         School             @relation(fields: [schoolId], references: [id])
-  studentId      String             @db.ObjectId
-  feeStructureId String             @db.ObjectId
+  id             String              @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String              @db.ObjectId
+  school         School              @relation(fields: [schoolId], references: [id])
+  studentId      String              @db.ObjectId
+  feeStructureId String              @db.ObjectId
   amountAssigned Float
-  amountPaid     Float              @default(0)
+  amountPaid     Float               @default(0)
   status         FeeAssignmentStatus @default(PENDING)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
 
-  student      Student       @relation(fields: [studentId], references: [id])
-  feeStructure FeeStructure  @relation(fields: [feeStructureId], references: [id])
+  student      Student      @relation(fields: [studentId], references: [id])
+  feeStructure FeeStructure @relation(fields: [feeStructureId], references: [id])
 
   @@unique([studentId, feeStructureId])
 }
@@ -491,8 +498,8 @@ model Message {
   sender     User     @relation(fields: [senderId], references: [id], name: "sender")
   subject    String?
   content    String
-  type       String   // "email" or "sms"
-  recipients Json     // array of { type: "group" | "user", id: string, name?: string }
+  type       String // "email" or "sms"
+  recipients Json // array of { type: "group" | "user", id: string, name?: string }
   sentAt     DateTime @default(now())
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -552,18 +559,18 @@ enum PayrollStatus {
 
 // ========== TEST ==========
 model Test {
-  id            String        @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId      String        @db.ObjectId
-  school        School        @relation(fields: [schoolId], references: [id])
+  id            String     @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId      String     @db.ObjectId
+  school        School     @relation(fields: [schoolId], references: [id])
   name          String
-  classId       String        @db.ObjectId
-  armId         String        @db.ObjectId
+  classId       String     @db.ObjectId
+  armId         String     @db.ObjectId
   subjects      String[]
-  questionCount Int           @default(0)
-  duration      Int           @default(0)
-  status        TestStatus    @default(DRAFT)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  questionCount Int        @default(0)
+  duration      Int        @default(0)
+  status        TestStatus @default(DRAFT)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   class Class @relation(fields: [classId], references: [id])
   arm   Arm   @relation(fields: [armId], references: [id])
@@ -618,13 +625,13 @@ model TestAttempt {
 
 // ========== ACADEMIC YEAR ==========
 model AcademicYear {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String   @db.ObjectId
-  school      School   @relation(fields: [schoolId], references: [id])
-  name        String
-  isActive    Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String   @db.ObjectId
+  school    School   @relation(fields: [schoolId], references: [id])
+  name      String
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   terms      Term[]
   promotions StudentPromotionHistory[]
@@ -644,7 +651,7 @@ model Term {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
+  academicYear AcademicYear              @relation(fields: [academicYearId], references: [id])
   promotions   StudentPromotionHistory[]
 
   @@unique([academicYearId, name])
@@ -658,7 +665,7 @@ model InventoryItem {
   name      String
   quantity  Int
   category  String
-  status    String   // "Good" | "Needs Repair" | "Broken" | "Low Stock"
+  status    String // "Good" | "Needs Repair" | "Broken" | "Low Stock"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -672,7 +679,7 @@ model PromotionRule {
   school      School   @relation(fields: [schoolId], references: [id])
   fromClass   String
   toClass     String
-  minAverage  Int      // e.g., 60 means 60%
+  minAverage  Int // e.g., 60 means 60%
   isAutomatic Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -747,7 +754,25 @@ enum Role {
   PARENT
   STUDENT
   PRINCIPAL
+  VICE_PRINCIPAL
   BURSAR
   ACCOUNTANT
   LIBRARIAN
+}
+
+// ========== ROLE (RBAC – system + admin-created custom roles) ==========
+model RoleDef {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  school      School   @relation(fields: [schoolId], references: [id])
+  name        String // e.g. "ADMIN", "TEACHER", "VICE_PRINCIPAL", "EXAM_OFFICER"
+  label       String? // display name, e.g. "Vice Principal"
+  description String?
+  isSystem    Boolean  @default(false) // system roles cannot be deleted
+  privileges  String[] @default([]) // page privilege keys granted to holders
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([schoolId, name])
+  @@map("roles")
 }

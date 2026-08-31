@@ -1,6 +1,7 @@
 import prisma from '../config/db';
 import bcrypt from 'bcryptjs';
 import { getCurrentTenantId } from '../utils/tenantContext';
+import { syncService } from './syncService';
 
 export const studentService = {
   // ---------- Existing methods ----------
@@ -185,11 +186,18 @@ export const studentService = {
       updateData.parentId = newParent.id;
     }
 
-    return prisma.student.update({
+    const updatedStudent = await prisma.student.update({
       where: { id, schoolId: tenantId },
       data: updateData,
       include: { parent: true, class: true, arm: true },
     });
+
+    // If the student's arm changed, re-sync subject enrolments to the new arm
+    if (data.armId !== undefined) {
+      await syncService.syncStudentSubjectsForStudent(tenantId, updatedStudent.id);
+    }
+
+    return updatedStudent;
   },
 
   assignParent: async (studentId: string | null | undefined, parentId: string) => {
@@ -256,6 +264,13 @@ export const studentService = {
   updateStudentSubjects: async (studentId: string, subjectIds: string[]) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
+
+    // Integrity: only allow subjects that exist in this school
+    const schoolSubjectIds = new Set(
+      (await prisma.subject.findMany({ where: { schoolId: tenantId }, select: { id: true } })).map((s) => s.id),
+    );
+    const invalid = subjectIds.filter((sid) => !schoolSubjectIds.has(sid));
+    if (invalid.length) throw new Error('Some subjects do not belong to this school');
 
     await prisma.studentSubject.deleteMany({
       where: { studentId, schoolId: tenantId },

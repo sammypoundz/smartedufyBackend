@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../config/prisma';
 import { registerSchema, loginSchema } from '../validations/authValidation';
 import { authMiddleware } from '../middleware/auth';
+import { resolvePrivileges } from './roles';
 
 const router = Router();
 
@@ -75,7 +76,7 @@ router.post('/register', async (req, res, next) => {
     });
 
     const token = jwt.sign(
-      { id: user.id, role: user.role, schoolId },
+      { id: user.id, role: user.role, roles: user.roles || [user.role], schoolId },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
@@ -87,6 +88,7 @@ router.post('/register', async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        roles: user.roles || [user.role],
         isActive: user.isActive,
         schoolId,
         allowedPages: user.allowedPages || [],
@@ -124,8 +126,23 @@ router.post('/login', async (req, res, next) => {
       return res.status(403).json({ error: 'Your account is inactive. Contact admin.' });
     }
 
+    // Normalize roles: always include the legacy primary role
+    const roles = Array.from(new Set([...(user.roles || []), user.role]))
+    const rolePrivileges = await resolvePrivileges(user.schoolId, roles)
+    // If the admin saved an explicit page list for this user, that list IS
+    // their access (override). Otherwise they fall back to role defaults.
+    const privileges = (user.allowedPages || []).length > 0
+      ? Array.from(new Set(user.allowedPages))
+      : rolePrivileges;
+
     const token = jwt.sign(
-      { id: user.id, role: user.role, schoolId: user.schoolId },
+      {
+        id: user.id,
+        role: user.role,
+        roles,
+        privileges,
+        schoolId: user.schoolId,
+      },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
@@ -137,6 +154,8 @@ router.post('/login', async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        roles,
+        privileges,
         isActive: user.isActive,
         schoolId: user.schoolId,
         allowedPages: user.allowedPages || [],
@@ -219,7 +238,27 @@ router.get('/me', authMiddleware, async (req, res, next) => {
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
     const profile = user.student || user.teacher || user.parent;
-    res.json({ ...user, profile });
+
+    // Resolve roles + effective privileges fresh from the DB so that role or
+    // privilege changes made by an admin apply without requiring a re-login.
+    const roles = Array.from(new Set([...(user.roles || []), user.role]));
+    // Explicit allowedPages list saved by an admin overrides role defaults.
+    const privileges = (user.allowedPages || []).length > 0
+      ? Array.from(new Set(user.allowedPages))
+      : await resolvePrivileges(user.schoolId, roles);
+
+    res.json({
+      id: user.id,
+      name: profile?.name || user.name,
+      email: user.email,
+      role: user.role,
+      roles,
+      privileges,
+      allowedPages: user.allowedPages || [],
+      isActive: user.isActive,
+      schoolId: user.schoolId,
+      profile,
+    });
   } catch (err) {
     next(err);
   }
