@@ -10,7 +10,7 @@ export const studentService = {
     if (armId) where.armId = armId;
     return prisma.student.findMany({
       where,
-      include: { parent: true, class: true, arm: true, user: { select: { email: true } } },
+      include: { parent: true, class: true, arm: { include: { class: true } }, user: { select: { email: true } } },
       orderBy: { name: 'asc' },
     }); // middleware adds schoolId
   },
@@ -68,16 +68,30 @@ export const studentService = {
     const tempPassword = Math.random().toString(36).slice(-8);
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
-    const user = await prisma.user.create({
-      data: {
-        name: data.name,
-        email,
-        password: hashedPassword,
-        role: 'STUDENT',
-        isActive: true,
-        schoolId: tenantId,
-      },
-    });
+    // Reuse an existing account for this email if it has no student profile yet
+    // (e.g. orphaned accounts left behind by a previous upload/cleanup). Otherwise
+    // the unique email constraint would make every re-upload fail silently.
+    let user = await prisma.user.findUnique({ where: { email } });
+    if (user) {
+      const linkedStudent = await prisma.student.findUnique({ where: { userId: user.id } });
+      if (linkedStudent) {
+        throw new Error(`Student "${data.name}" already exists (login: ${email}). If this is a re-upload, use a different name or remove the duplicate.`);
+      }
+      if (user.schoolId !== tenantId) {
+        throw new Error(`A user with email ${email} already exists in another school.`);
+      }
+    } else {
+      user = await prisma.user.create({
+        data: {
+          name: data.name,
+          email,
+          password: hashedPassword,
+          role: 'STUDENT',
+          isActive: true,
+          schoolId: tenantId,
+        },
+      });
+    }
 
     return prisma.student.create({
       data: {
@@ -237,9 +251,45 @@ export const studentService = {
     await prisma.studentSubject.deleteMany({
       where: { studentId: id, schoolId: tenantId },
     });
-    return prisma.student.delete({
+    const student = await prisma.student.delete({
       where: { id, schoolId: tenantId },
     });
+    // Remove the linked login account so the email can be reused on re-upload
+    if (student.userId) {
+      await prisma.user.deleteMany({ where: { id: student.userId, role: 'STUDENT' } });
+    }
+    return student;
+  },
+
+  // Bulk delete students (and their related records + login accounts) scoped to the tenant
+  deleteMany: async (ids: string[]) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+    if (!ids || ids.length === 0) throw new Error('No students selected');
+
+    const students = await prisma.student.findMany({
+      where: { id: { in: ids }, schoolId: tenantId },
+      select: { id: true, userId: true },
+    });
+    const studentIds = students.map((s) => s.id);
+    const userIds = students.map((s) => s.userId).filter(Boolean);
+
+    await prisma.studentSubject.deleteMany({ where: { studentId: { in: studentIds }, schoolId: tenantId } });
+    await prisma.attendance.deleteMany({ where: { studentId: { in: studentIds } } });
+    await prisma.studentPromotionHistory.deleteMany({ where: { studentId: { in: studentIds } } });
+    await prisma.result.deleteMany({ where: { studentId: { in: studentIds } } });
+    await prisma.feePayment.deleteMany({ where: { studentId: { in: studentIds } } });
+    await prisma.studentFee.deleteMany({ where: { studentId: { in: studentIds } } });
+    await prisma.testAttempt.deleteMany({ where: { studentId: { in: studentIds } } });
+
+    await prisma.student.deleteMany({
+      where: { id: { in: studentIds }, schoolId: tenantId },
+    });
+    // Remove linked login accounts so emails can be reused on re-upload
+    if (userIds.length > 0) {
+      await prisma.user.deleteMany({ where: { id: { in: userIds }, role: 'STUDENT' } });
+    }
+    return { deleted: studentIds.length };
   },
 
   // ---------- Additional methods ----------
@@ -305,7 +355,7 @@ export const studentService = {
   getStudentResults: async (studentId: string) => {
     const results = await prisma.result.findMany({
       where: { studentId },
-      include: { subject: true },
+      include: { subject: true, arm: { include: { class: true } }, academicYear: true },
       orderBy: [{ term: 'desc' }, { subject: { name: 'asc' } }],
     }); // middleware adds schoolId
     return results.map(result => ({
@@ -313,6 +363,133 @@ export const studentService = {
       score: result.score,
       grade: result.grade || '',
       term: result.term,
+      arm: result.arm ? `${result.arm.class?.name ?? ''} ${result.arm.letter}`.trim() : '',
+      academicYear: result.academicYear?.name || '',
+      ca: result.ca,
+      exam: result.exam,
+      total: result.total,
     }));
+  },
+
+  // Full class/grade journey of the student, oldest first
+  getStudentHistory: async (studentId: string) => {
+    const [promotions, student] = await Promise.all([
+      prisma.studentPromotionHistory.findMany({
+        where: { studentId },
+        include: {
+          fromArm: { include: { class: true } },
+          toArm: { include: { class: true } },
+          fromClass: true,
+          toClass: true,
+          academicYear: true,
+          term: true,
+        },
+        orderBy: { promotedAt: 'asc' },
+      }),
+      prisma.student.findUnique({
+        where: { id: studentId },
+        select: {
+          id: true, name: true, admissionNumber: true, createdAt: true,
+          arm: { include: { class: true } },
+        },
+      }),
+    ]);
+    if (!student) throw new Error('Student not found');
+
+    // Build the chronological list of class placements from the promotion trail
+    const placements: { className: string; arm: string; academicYear: string; term: string; promotedAt: Date }[] = [];
+    if (promotions.length > 0) {
+      const first = promotions[0];
+      placements.push({
+        className: first.fromClass?.name || first.fromArm?.class?.name || '',
+        arm: first.fromArm?.letter || '',
+        academicYear: first.academicYear?.name || '',
+        term: first.term?.name || '',
+        promotedAt: first.promotedAt,
+      });
+      for (const p of promotions) {
+        placements.push({
+          className: p.toClass?.name || p.toArm?.class?.name || '',
+          arm: p.toArm?.letter || '',
+          academicYear: p.academicYear?.name || '',
+          term: p.term?.name || '',
+          promotedAt: p.promotedAt,
+        });
+      }
+    } else if (student.arm) {
+      placements.push({
+        className: student.arm.class?.name || '',
+        arm: student.arm.letter,
+        academicYear: '',
+        term: '',
+        promotedAt: student.createdAt,
+      });
+    }
+
+    return { student: { id: student.id, name: student.name, admissionNumber: student.admissionNumber }, placements };
+  },
+
+  // Academic transcript across ALL classes/years the student has attended
+  getStudentTranscript: async (studentId: string) => {
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
+      select: {
+        id: true, name: true, admissionNumber: true, gender: true,
+        arm: { include: { class: true } },
+      },
+    });
+    if (!student) throw new Error('Student not found');
+
+    const results = await prisma.result.findMany({
+      where: { studentId },
+      include: { subject: true, arm: { include: { class: true } }, academicYear: true },
+      orderBy: [{ academicYearId: 'asc' }, { term: 'asc' }, { subject: { name: 'asc' } }],
+    });
+
+    // Group results by class/level then academic year
+    const grouped: Record<string, {
+      className: string;
+      academicYear: string;
+      entries: { subject: string; ca: number; exam: number; total: number; score: number; grade: string; term: string }[];
+      average: number;
+    }> = {};
+    for (const r of results) {
+      const className = r.arm ? `${r.arm.class?.name ?? ''} ${r.arm.letter}`.trim() : 'Unknown';
+      const year = r.academicYear?.name || 'Unknown';
+      const key = `${className}|${year}`;
+      if (!grouped[key]) grouped[key] = { className, academicYear: year, entries: [], average: 0 };
+      grouped[key].entries.push({
+        subject: r.subject.name,
+        ca: r.ca,
+        exam: r.exam,
+        total: r.total,
+        score: r.score,
+        grade: r.grade || '',
+        term: r.term,
+      });
+    }
+    const groups = Object.values(grouped).map(g => {
+      g.average = g.entries.length
+        ? Math.round((g.entries.reduce((s, e) => s + e.score, 0) / g.entries.length) * 100) / 100
+        : 0;
+      return g;
+    });
+
+    const overallAverage = results.length
+      ? Math.round((results.reduce((s, r) => s + r.score, 0) / results.length) * 100) / 100
+      : 0;
+
+    return {
+      student: {
+        id: student.id,
+        name: student.name,
+        admissionNumber: student.admissionNumber,
+        gender: student.gender,
+        currentClass: student.arm ? `${student.arm.class?.name ?? ''} ${student.arm.letter}`.trim() : '',
+      },
+      groups,
+      overallAverage,
+      totalSubjects: new Set(results.map(r => r.subjectId)).size,
+    };
   },
 };

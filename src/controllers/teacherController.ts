@@ -40,7 +40,7 @@ export const teacherController = {
       const userId = req.user?.id;
       console.log('🔍 getMe called with userId:', userId);
       console.log('🔍 Full user object:', JSON.stringify(req.user, null, 2));
-      
+
       if (!userId) {
         console.log('❌ No userId found in request');
         return res.status(401).json({ error: 'Unauthorized - User ID not found' });
@@ -119,7 +119,7 @@ export const teacherController = {
         console.log('❌ Teacher record not found for user:', userId);
         console.log('ℹ️ The user exists but does not have a teacher profile.');
         console.log('ℹ️ User role:', user.role);
-        
+
         // Return a helpful response instead of 404
         return res.status(404).json({
           error: 'Teacher profile not found',
@@ -138,7 +138,7 @@ export const teacherController = {
       console.log('✅ Teacher found:', teacher.name, 'ID:', teacher.id);
       console.log('✅ Arms count:', teacher.arms?.length || 0);
       console.log('✅ Subject arms count:', teacher.subjectArms?.length || 0);
-      
+
       res.json(teacher);
     } catch (err: any) {
       console.error('❌ Get current teacher error:', err);
@@ -156,7 +156,13 @@ export const teacherController = {
     const id = getStringParam(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid id' });
     try {
-      const teacher = await teacherService.getById(id);
+      let teacher = await teacherService.getById(id);
+      // Fallback: the id may be a User id (e.g. navigating from User Management).
+      // Resolve the teacher record via the user, then fetch it fully.
+      if (!teacher) {
+        const byUser = await teacherService.getByUserId(id);
+        if (byUser) teacher = await teacherService.getById(byUser.id);
+      }
       if (!teacher) return res.status(404).json({ error: 'Teacher not found' });
       res.json(teacher);
     } catch (err: any) {

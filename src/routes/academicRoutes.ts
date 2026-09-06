@@ -11,6 +11,13 @@ router.use(authMiddleware);
 router.get('/grading-scales', academicController.getGradingScales);
 router.post('/grading-scales/bulk', roleGuard(['ADMIN']), academicController.saveGradingScales);
 
+// Grading scale groups
+router.get('/grading-scale-groups', academicController.getGradingScaleGroups);
+router.post('/grading-scale-groups', roleGuard(['ADMIN']), academicController.createGradingScaleGroup);
+router.put('/grading-scale-groups/:id', roleGuard(['ADMIN']), academicController.updateGradingScaleGroup);
+router.delete('/grading-scale-groups/:id', roleGuard(['ADMIN']), academicController.deleteGradingScaleGroup);
+router.put('/classes/:classId/grading-scale-group', roleGuard(['ADMIN']), academicController.assignGradingScaleGroupToClass);
+
 router.get('/academic-years', academicController.getAcademicYears);
 router.post('/academic-years', roleGuard(['ADMIN']), academicController.createAcademicYear);
 

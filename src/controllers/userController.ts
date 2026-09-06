@@ -70,13 +70,32 @@ export const userController = {
   deleteUser: async (req: Request, res: Response) => {
     const id = getStringParam(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid id' });
-    try {
-      await userService.deleteUser(id);
+    try {      await userService.deleteUser(id);
       res.json({ message: 'User deleted' });
     } catch (err: any) {
       if (err.code === 'P2025') return res.status(404).json({ error: 'User not found' });
       console.error(err);
       res.status(500).json({ error: 'Failed to delete user' });
+    }
+  },
+
+  bulkDelete: async (req: Request, res: Response) => {
+    const ids: unknown = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((i) => typeof i === 'string')) {
+      return res.status(400).json({ error: 'ids must be a non-empty array of user ids' });
+    }
+    // Never allow an admin to bulk-delete their own account
+    const currentUserId = (req as any).user?.id;
+    const targetIds = currentUserId ? ids.filter((i: string) => i !== currentUserId) : ids;
+    if (targetIds.length === 0) {
+      return res.status(400).json({ error: 'You cannot delete your own account' });
+    }
+    try {
+      const result = await userService.deleteMany(targetIds);
+      res.json({ message: `Deleted ${result.deleted} user(s)`, ...result });
+    } catch (err) {
+      console.error('Bulk delete users error:', err);
+      res.status(500).json({ error: 'Failed to delete users' });
     }
   },
 

@@ -1,6 +1,8 @@
 import prisma from '../config/db';
 import { getCurrentTenantId } from '../utils/tenantContext';
 
+export type PushResultType = 'ca1' | 'ca2' | 'ca' | 'exam';
+
 export interface ResultInput {
   studentId: string;
   subjectId: string;
@@ -14,14 +16,50 @@ export interface ResultInput {
 }
 
 // ---------- Private helpers ----------
-async function computeGrade(score: number): Promise<string> {
-  const scales = await prisma.gradingScale.findMany({ orderBy: { minScore: 'desc' } });
+/**
+ * Compute a grade for a score, honouring the multigrading scale feature:
+ * if the class the result belongs to has a grading scale group assigned, that
+ * group's scales are used; otherwise the school-wide (ungrouped) scales.
+ */
+async function computeGrade(score: number, classId?: string | null): Promise<string> {
+  let scales;
+  if (classId) {
+    const cls = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { gradingScaleGroupId: true },
+    });
+    if (cls?.gradingScaleGroupId) {
+      scales = await prisma.gradingScale.findMany({
+        where: { groupId: cls.gradingScaleGroupId },
+        orderBy: { minScore: 'desc' },
+      });
+    }
+  }
+  if (!scales) {
+    scales = await prisma.gradingScale.findMany({
+      where: { groupId: null },
+      orderBy: { minScore: 'desc' },
+    });
+    if (scales.length === 0) {
+      scales = await prisma.gradingScale.findMany({ orderBy: { minScore: 'desc' } });
+    }
+  }
   for (const scale of scales) {
     if (score >= scale.minScore && score <= scale.maxScore) {
       return scale.grade;
     }
   }
   return 'F';
+}
+
+/** Resolve the classId for an arm (needed to pick the right scale group). */
+async function getClassIdForArm(armId?: string | null): Promise<string | null> {
+  if (!armId) return null;
+  const arm = await prisma.arm.findUnique({
+    where: { id: armId },
+    select: { classId: true },
+  });
+  return arm?.classId ?? null;
 }
 
 async function getOrCreateCbtSubject(): Promise<string> {
@@ -168,10 +206,15 @@ export const resultService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
+    // Auto-compute grade server-side using the class's grading scale group
+    const classId = await getClassIdForArm(data.armId);
+    const grade = data.grade ?? (await computeGrade(data.total, classId));
+
     return prisma.result.create({
       data: {
         ...data,
         score: data.total,
+        grade,
         schoolId: tenantId,
       },
     });
@@ -187,6 +230,13 @@ export const resultService = {
     const updateData: any = { ...data };
     if (data.total !== undefined) {
       updateData.score = data.total;
+      // Re-compute grade with the class's grading scale group when total changes
+      const existing = await prisma.result.findUnique({
+        where: { id, schoolId: tenantId },
+        select: { armId: true },
+      });
+      const classId = await getClassIdForArm(existing?.armId);
+      updateData.grade = data.grade ?? (await computeGrade(data.total, classId));
     }
     return prisma.result.update({
       where: { id, schoolId: tenantId },
@@ -243,14 +293,21 @@ export const resultService = {
   },
 
   /**
-   * Push test attempt scores to student results (CA or Exam)
+   * Push test attempt scores to student results (First CA, Second CA, or Exam)
    * Also links the CBT subject to the arm so it appears in the result compiler.
+   *
+   * CA handling:
+   * - Pushing to 'ca1' writes the score into the ca field (only if not already
+   *   set by an earlier First CA push, so re-pushes don't wipe exam scores).
+   * - Pushing to 'ca2' merges: the ca field becomes ca1 + ca2 capped at the
+   *   school's total CA allocation from the AssessmentFormat (default 40).
+   * - Pushing to 'exam' sets the exam field. Total = ca + exam.
    */
   pushTestAttemptsToResults: async (data: {
     testId: string;
     academicYearId: string;
     term: string;
-    resultType: 'ca' | 'exam';
+    resultType: PushResultType;
   }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
@@ -258,7 +315,7 @@ export const resultService = {
     // 1. Get the test to retrieve armId (ensure it belongs to tenant)
     const test = await prisma.test.findUnique({
       where: { id: data.testId, schoolId: tenantId },
-      select: { armId: true, name: true },
+      select: { armId: true, name: true, arm: { select: { classId: true } } },
     });
     if (!test) throw new Error('Test not found');
 
@@ -288,18 +345,55 @@ export const resultService = {
     });
     if (attempts.length === 0) throw new Error('No attempts found for this test');
 
-    // 4. Prepare result records with computed grades
+    // 4. Fetch existing results for this arm/subject/term/year so CA scores
+    //    can be merged (First CA + Second CA) instead of overwritten.
+    const existingResults = await prisma.result.findMany({
+      where: {
+        armId: test.armId,
+        subjectId,
+        term: data.term,
+        academicYearId: data.academicYearId,
+      },
+      select: { studentId: true, ca: true, exam: true },
+    });
+    const existingByStudent = new Map(existingResults.map(r => [r.studentId, r]));
+
+    // School's CA allocation from the assessment format (e.g. CA 40 / Exam 60)
+    const format = await prisma.assessmentFormat.findFirst({
+      where: { schoolId: tenantId },
+      orderBy: { createdAt: 'asc' },
+    });
+    const caAllocation = format?.ca ?? 40;
+
+    // 5. Prepare result records with computed grades
     const resultsData = await Promise.all(attempts.map(async (attempt) => {
       const score = attempt.score;
-      const grade = await computeGrade(score);
+      const grade = await computeGrade(score, test.arm?.classId);
+      const existing = existingByStudent.get(attempt.studentId);
+
+      let ca: number;
+      let exam: number;
+      if (data.resultType === 'exam') {
+        exam = score;
+        ca = existing?.ca ?? 0;
+      } else if (data.resultType === 'ca1') {
+        ca = Math.min(score, caAllocation);
+        exam = existing?.exam ?? 0;
+      } else {
+        // 'ca2' (and legacy 'ca'): merge First + Second CA, capped at allocation
+        const firstCa = existing?.ca ?? 0;
+        ca = Math.min(firstCa + score, caAllocation);
+        exam = existing?.exam ?? 0;
+      }
+
       return {
         studentId: attempt.studentId,
         subjectId,
         armId: test.armId,
         term: data.term,
-        ca: data.resultType === 'ca' ? score : 0,
-        exam: data.resultType === 'exam' ? score : 0,
-        total: attempt.total,
+        ca,
+        exam,
+        total: ca + exam,
         score,
         grade,
         academicYearId: data.academicYearId,
@@ -307,7 +401,7 @@ export const resultService = {
       };
     }));
 
-    // 5. Upsert results in a transaction
+    // 6. Upsert results in a transaction
     await prisma.$transaction(
       resultsData.map(result =>
         prisma.result.upsert({

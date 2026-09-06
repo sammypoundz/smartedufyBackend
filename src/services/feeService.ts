@@ -7,6 +7,36 @@ type BreakdownItem = { name: string; amount: number };
 type PaymentBreakdownItem = { itemName: string; amount: number };
 
 export const feeService = {
+  // ---------- Shared helpers ----------
+  // Resolve all active students of a class (directly via classId, or via one of
+  // the class's arms). Dedupes students that match both conditions.
+  getStudentsInClass: async (tenantId: string, className: string) => {
+    const cls = await prisma.class.findFirst({
+      where: { name: className, schoolId: tenantId },
+      select: { id: true },
+    });
+    if (!cls) return [];
+
+    const arms = await prisma.arm.findMany({
+      where: { classId: cls.id, schoolId: tenantId },
+      select: { id: true },
+    });
+
+    const students = await prisma.student.findMany({
+      where: {
+        schoolId: tenantId,
+        isActive: true,
+        OR: [
+          { classId: cls.id },
+          ...(arms.length > 0 ? [{ armId: { in: arms.map(a => a.id) } }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+
+    return Array.from(new Map(students.map(s => [s.id, s])).values());
+  },
+
   // ---------- Fee Structures ----------
   getAllFeeStructures: async () => {
     return prisma.feeStructure.findMany({
@@ -23,7 +53,18 @@ export const feeService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const totalAmount = data.breakdown.reduce((sum, item) => sum + item.amount, 0);
+    const cls = await prisma.class.findFirst({
+      where: { name: data.className, schoolId: tenantId },
+      select: { id: true },
+    });
+    if (!cls) throw new Error(`Class "${data.className}" not found`);
+
+    const students = await feeService.getStudentsInClass(tenantId, data.className);
+
+    // The breakdown amounts are per student. The fee structure's totalAmount
+    // represents the expected class-wide total: per-student fee x student count.
+    const perStudentAmount = data.breakdown.reduce((sum, item) => sum + item.amount, 0);
+    const totalAmount = perStudentAmount * students.length;
 
     const feeStructure = await prisma.feeStructure.create({
       data: {
@@ -36,20 +77,11 @@ export const feeService = {
       },
     });
 
-    // Find students belonging to this tenant and class
-    const students = await prisma.student.findMany({
-      where: {
-        class: { name: data.className },
-        schoolId: tenantId,
-      },
-      select: { id: true },
-    });
-
     if (students.length > 0) {
       const studentFeeData = students.map(student => ({
         studentId: student.id,
         feeStructureId: feeStructure.id,
-        amountAssigned: totalAmount,
+        amountAssigned: perStudentAmount,
         amountPaid: 0,
         status: 'PENDING' as const,
         schoolId: tenantId,
@@ -75,19 +107,90 @@ export const feeService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
+    const existing = await prisma.feeStructure.findUnique({
+      where: { id, schoolId: tenantId },
+    });
+    if (!existing) throw new Error('Fee structure not found');
+
+    // Per-student fee is the sum of the breakdown items; the class-wide total
+    // is that fee multiplied by the number of students in the class.
+    const className = data.className ?? existing.className;
+    const students = await feeService.getStudentsInClass(tenantId, className);
+
+    let perStudentAmount: number | undefined;
     let totalAmount: number | undefined;
     if (data.breakdown) {
-      totalAmount = data.breakdown.reduce((sum, item) => sum + item.amount, 0);
+      perStudentAmount = data.breakdown.reduce((sum, item) => sum + item.amount, 0);
+      totalAmount = perStudentAmount * students.length;
     }
 
     const updateData: any = { ...data };
     if (data.breakdown) updateData.breakdown = data.breakdown as Prisma.JsonArray;
     if (totalAmount !== undefined) updateData.totalAmount = totalAmount;
 
-    return prisma.feeStructure.update({
+    const updated = await prisma.feeStructure.update({
       where: { id, schoolId: tenantId },
       data: updateData,
     });
+
+    // If the per-student fee changed, update the amount assigned to every
+    // student that already has this fee.
+    if (perStudentAmount !== undefined) {
+      await prisma.studentFee.updateMany({
+        where: { feeStructureId: id, schoolId: tenantId },
+        data: { amountAssigned: perStudentAmount },
+      });
+    }
+
+    // Backfill: make sure every student currently in the class has this fee
+    // assigned (covers students enrolled after the fee was created).
+    await feeService.assignFeeToMissingStudents(tenantId, updated, perStudentAmount);
+
+    return updated;
+  },
+
+  assignFeeToMissingStudents: async (tenantId: string, feeStructure: {
+    id: string;
+    className: string;
+    breakdown?: unknown;
+    totalAmount: number;
+  }, perStudentAmountOverride?: number) => {
+    const students = await feeService.getStudentsInClass(tenantId, feeStructure.className);
+    if (students.length === 0) return 0;
+
+    const existing = await prisma.studentFee.findMany({
+      where: {
+        feeStructureId: feeStructure.id,
+        studentId: { in: students.map(s => s.id) },
+        schoolId: tenantId,
+      },
+      select: { studentId: true },
+    });
+    const existingIds = new Set(existing.map(e => e.studentId));
+
+    const missing = students.filter(s => !existingIds.has(s.id));
+    if (missing.length === 0) return 0;
+
+    // Per-student amount: explicit override, else derive from the breakdown,
+    // else fall back to totalAmount divided by the current student count.
+    const perStudentAmount =
+      perStudentAmountOverride ??
+      (Array.isArray(feeStructure.breakdown)
+        ? (feeStructure.breakdown as { amount: number }[]).reduce((sum, item) => sum + item.amount, 0)
+        : feeStructure.totalAmount / students.length);
+
+    await prisma.studentFee.createMany({
+      data: missing.map(student => ({
+        studentId: student.id,
+        feeStructureId: feeStructure.id,
+        amountAssigned: perStudentAmount,
+        amountPaid: 0,
+        status: 'PENDING' as const,
+        schoolId: tenantId,
+      })),
+    });
+
+    return missing.length;
   },
 
   deleteFeeStructure: async (id: string) => {
@@ -184,7 +287,9 @@ export const feeService = {
         data: {
           studentId: data.studentId,
           feeStructureId: data.feeStructureId,
-          amountAssigned: feeStructure.totalAmount,
+          amountAssigned: Array.isArray(feeStructure.breakdown)
+            ? (feeStructure.breakdown as { amount: number }[]).reduce((sum, item) => sum + item.amount, 0)
+            : feeStructure.totalAmount,
           amountPaid: 0,
           status: 'PENDING',
           schoolId: tenantId,

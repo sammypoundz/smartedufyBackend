@@ -36,6 +36,7 @@ export const ALL_PRIVILEGES: PagePrivilege[] = [
   { key: "roles", label: "Roles & Privileges", group: "Administration" },
   { key: "inventory", label: "Inventory", group: "Administration" },
   { key: "settings", label: "Settings", group: "Administration" },
+  { key: "audit-logs", label: "Audit Logs", group: "Administration" },
 ];
 
 // Default privilege sets attached to system roles. Any user holding the

@@ -258,6 +258,14 @@ export const userService = {
 
       const student = await tx.student.findUnique({ where: { userId: id } });
       if (student) {
+        // Remove all records that reference the student before deleting
+        // (same cleanup as studentService.deleteMany).
+        await tx.attendance.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+        await tx.studentPromotionHistory.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+        await tx.result.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+        await tx.feePayment.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+        await tx.studentFee.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+        await tx.testAttempt.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
         await tx.studentSubject.deleteMany({
           where: { studentId: student.id, schoolId: tenantId },
         });
@@ -268,6 +276,25 @@ export const userService = {
         where: { id, schoolId: tenantId },
       });
     });
+  },
+
+  deleteMany: async (ids: string[]) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    let deleted = 0;
+    const failed: string[] = [];
+    // Reuse the single-delete cleanup logic per user (each runs in its own
+    // transaction) so dependent profile rows are handled consistently.
+    for (const id of ids) {
+      try {
+        await userService.deleteUser(id);
+        deleted++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    return { deleted, failed };
   },
 
   updateStatus: async (id: string, isActive: boolean) => {

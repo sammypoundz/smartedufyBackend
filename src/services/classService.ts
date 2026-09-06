@@ -8,6 +8,7 @@ export const classService = {
   getAll: () =>
     prisma.class.findMany({
       include: {
+        gradingScaleGroup: { select: { id: true, name: true } },
         arms: {
           include: {
             teacher: {

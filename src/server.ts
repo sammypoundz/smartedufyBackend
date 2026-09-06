@@ -32,12 +32,14 @@ import staffRoutes from './routes/staff';
 import messageRoutes from './routes/messageRoutes';
 import inventoryRoutes from './routes/inventoryRoutes';
 import settingsRoutes from './routes/settingsRoutes';
+import auditLogRoutes from './routes/auditLogs';
 
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
 import { tenantMiddleware } from './middleware/tenant';
+import { auditMiddleware } from './middleware/audit';
 
 dotenv.config();
 
@@ -71,6 +73,7 @@ app.use('/api/auth', authRoutes); // login, register, etc.
 // ---------- Global authentication & tenant middleware ----------
 app.use(authMiddleware);      // sets req.user
 app.use(tenantMiddleware);    // sets tenant context & validates user belongs to tenant
+app.use(auditMiddleware);     // logs every mutating request
 
 // ---------- Protected routes (require authentication & tenant) ----------
 app.use('/api/classes', classRoutes);
@@ -100,6 +103,7 @@ app.use('/api/staff', staffRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/settings', settingsRoutes)
+app.use('/api/audit-logs', auditLogRoutes);
 
 // Error handler
 app.use(errorHandler);

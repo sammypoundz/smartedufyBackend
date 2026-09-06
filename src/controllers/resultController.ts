@@ -9,7 +9,7 @@ const pushTestAttemptsSchema = z.object({
   testId: z.string(),
   academicYearId: z.string(),
   term: z.string(),
-  resultType: z.enum(['ca', 'exam']),
+  resultType: z.enum(['ca1', 'ca2', 'ca', 'exam']),
 });
 
 export const resultController = {
@@ -107,9 +107,9 @@ export const resultController = {
   create: async (req: Request, res: Response) => {
     try {
       const data = createResultSchema.parse(req.body);
-      
+
       let resultData: ResultInput;
-      
+
       if (data.ca !== undefined && data.exam !== undefined) {
         if (!data.armId) {
           return res.status(400).json({ error: 'armId is required when using ca/exam' });
@@ -131,7 +131,7 @@ export const resultController = {
       } else {
         return res.status(400).json({ error: 'Invalid data: provide either (ca+exam) or (score)' });
       }
-      
+
       const result = await resultService.create(resultData);
       res.status(201).json(result);
     } catch (err: any) {
@@ -148,7 +148,7 @@ export const resultController = {
     if (!id) return res.status(400).json({ error: 'Invalid id' });
     try {
       const data = updateResultSchema.parse(req.body);
-      
+
       const updatePayload: any = { ...data };
       if (data.ca !== undefined && data.exam !== undefined) {
         const total = data.ca + data.exam;
@@ -159,7 +159,7 @@ export const resultController = {
       } else if (data.score !== undefined) {
         updatePayload.total = data.score;
       }
-      
+
       const updated = await resultService.update(id, updatePayload);
       if (!updated) return res.status(404).json({ error: 'Result not found' });
       res.json(updated);

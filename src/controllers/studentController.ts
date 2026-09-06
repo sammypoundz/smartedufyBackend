@@ -149,6 +149,9 @@ export const studentController = {
     } catch (err: any) {
       console.error('Create student error:', err);
       if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
+      if (typeof err.message === 'string' && err.message.includes('already exists')) {
+        return res.status(409).json({ error: err.message });
+      }
       res.status(500).json({ error: 'Failed to create student' });
     }
   },
@@ -196,6 +199,20 @@ export const studentController = {
     } catch (err: any) {
       console.error('Delete student error:', err);
       res.status(500).json({ error: 'Failed to delete student' });
+    }
+  },
+
+  bulkDelete: async (req: Request, res: Response) => {
+    const ids: unknown = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((i) => typeof i === 'string')) {
+      return res.status(400).json({ error: 'ids must be a non-empty array of student ids' });
+    }
+    try {
+      const result = await studentService.deleteMany(ids as string[]);
+      res.json({ message: `Deleted ${result.deleted} student(s)`, ...result });
+    } catch (err: any) {
+      console.error('Bulk delete students error:', err);
+      res.status(500).json({ error: 'Failed to delete students' });
     }
   },
 
@@ -319,6 +336,30 @@ export const studentController = {
     } catch (err: any) {
       console.error('Get student results error:', err);
       res.status(500).json({ error: 'Failed to fetch results' });
+    }
+  },
+
+  getStudentHistory: async (req: Request, res: Response) => {
+    const id = getStringParam(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid student id' });
+    try {
+      const history = await studentService.getStudentHistory(id);
+      res.json(history);
+    } catch (err: any) {
+      console.error('Get student history error:', err);
+      res.status(500).json({ error: 'Failed to fetch promotion history' });
+    }
+  },
+
+  getStudentTranscript: async (req: Request, res: Response) => {
+    const id = getStringParam(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid student id' });
+    try {
+      const transcript = await studentService.getStudentTranscript(id);
+      res.json(transcript);
+    } catch (err: any) {
+      console.error('Get student transcript error:', err);
+      res.status(500).json({ error: 'Failed to generate transcript' });
     }
   },
 };

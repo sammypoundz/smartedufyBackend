@@ -6,4 +6,5 @@ import { roleGuard } from '../middleware/roleGuard';
 const router = Router();
 router.use(authMiddleware);
 router.post('/promote', roleGuard(['ADMIN']), promotionController.promote);
+router.post('/bulk-promote', roleGuard(['ADMIN']), promotionController.bulkPromote);
 export default router;

@@ -5,6 +5,7 @@ import { prisma } from '../config/prisma';
 import { registerSchema, loginSchema } from '../validations/authValidation';
 import { authMiddleware } from '../middleware/auth';
 import { resolvePrivileges } from './roles';
+import { logActivity } from '../services/auditService';
 
 const router = Router();
 
@@ -142,10 +143,28 @@ router.post('/login', async (req, res, next) => {
         roles,
         privileges,
         schoolId: user.schoolId,
+        name: user.name,
+        email: user.email,
       },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
+
+    // Audit: successful login
+    logActivity({
+      schoolId: user.schoolId,
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+      userRole: user.role,
+      action: 'LOGIN',
+      entity: 'Auth',
+      description: `Logged in`,
+      method: 'POST',
+      path: '/api/auth/login',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
 
     res.json({
       token,

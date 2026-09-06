@@ -1,0 +1,21 @@
+Environment variables loaded from .env
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": MongoDB database "smartedufyDb" at "cluster0.di9abps.mongodb.net"
+Applying the following changes:
+
+[+] Collection `GradingScaleGroup`
+[+] Unique index `GradingScaleGroup_schoolId_name_key` on ({"schoolId":1,"name":1})
+
+
+Your database indexes are now in sync with your Prisma schema. Done in 10.24s
+
+┌─────────────────────────────────────────────────────────┐
+│  Update available 5.22.0 -> 8.0.0-rc.12                 │
+│                                                         │
+│  This is a major update - please follow the guide at    │
+│  https://pris.ly/d/major-version-upgrade                │
+│                                                         │
+│  Run the following to update                            │
+│    npm i --save-dev prisma@latest                       │
+│    npm i @prisma/client@latest                          │
+└─────────────────────────────────────────────────────────┘

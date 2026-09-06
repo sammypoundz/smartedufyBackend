@@ -35,6 +35,7 @@ model School {
   timetableEntries   TimetableEntry[]
   results            Result[]
   gradingScales      GradingScale[]
+  gradingScaleGroups GradingScaleGroup[]
   assessmentFormats  AssessmentFormat[]
   topics             Topic[]
   lessonPlans        LessonPlan[]
@@ -52,6 +53,8 @@ model School {
   terms              Term[]
   promotionHistories StudentPromotionHistory[]
   inventoryItems     InventoryItem[]
+
+  auditLogs           AuditLog[]
 
   // NEW: Settings models
   promotionRules      PromotionRule[]
@@ -82,6 +85,7 @@ model User {
   teacher        Teacher?
   payrollEntries Payroll[]
   messagesSent   Message[] @relation("sender")
+  auditLogs      AuditLog[]
 
   @@map("users")
 }
@@ -162,8 +166,13 @@ model Class {
 
   arms        Arm[]
   students    Student[]
+  fromClassPromotions StudentPromotionHistory[] @relation("FromClassPromotions")
+  toClassPromotions   StudentPromotionHistory[] @relation("ToClassPromotions")
   lessonPlans LessonPlan[]
   tests       Test[]
+
+  gradingScaleGroupId String?             @db.ObjectId
+  gradingScaleGroup   GradingScaleGroup?  @relation(fields: [gradingScaleGroupId], references: [id])
 }
 
 // ========== ARM ==========
@@ -352,18 +361,38 @@ model Result {
   @@unique([studentId, subjectId, armId, term, academicYearId])
 }
 
-// ========== GRADING SCALE ==========
-model GradingScale {
+// ========== GRADING SCALE GROUP ==========
+// A school can define multiple grading scale groups (e.g. "WAEC Standard",
+// "Nursery Scale") and assign each group to the classes that should use it.
+model GradingScaleGroup {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   schoolId  String   @db.ObjectId
   school    School   @relation(fields: [schoolId], references: [id])
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  grades  GradingScale[]
+  classes Class[]
+
+  @@unique([schoolId, name])
+}
+
+// ========== GRADING SCALE ==========
+model GradingScale {
+  id        String              @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String              @db.ObjectId
+  school    School              @relation(fields: [schoolId], references: [id])
+  groupId   String?             @db.ObjectId
+  group     GradingScaleGroup?  @relation(fields: [groupId], references: [id])
   minScore  Int
   maxScore  Int
   grade     String
   points    Float?
-  isDefault Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isDefault Boolean             @default(false)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
 }
 
 // ========== ASSESSMENT FORMAT ==========
@@ -730,13 +759,17 @@ model StudentPromotionHistory {
   school         School   @relation(fields: [schoolId], references: [id])
   studentId      String   @db.ObjectId
   fromArmId      String   @db.ObjectId
+  fromClassId    String?  @db.ObjectId
   toArmId        String   @db.ObjectId
+  toClassId      String?  @db.ObjectId
   academicYearId String   @db.ObjectId
   termId         String   @db.ObjectId
   promotedAt     DateTime @default(now())
 
   student      Student      @relation(fields: [studentId], references: [id])
   fromArm      Arm          @relation(fields: [fromArmId], references: [id], name: "fromArm")
+  fromClass    Class?       @relation("FromClassPromotions", fields: [fromClassId], references: [id])
+  toClass      Class?       @relation("ToClassPromotions", fields: [toClassId], references: [id])
   toArm        Arm          @relation(fields: [toArmId], references: [id], name: "toArm")
   academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
   term         Term         @relation(fields: [termId], references: [id])
@@ -758,6 +791,33 @@ enum Role {
   BURSAR
   ACCOUNTANT
   LIBRARIAN
+}
+
+// ========== AUDIT LOG ==========
+model AuditLog {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  school      School   @relation(fields: [schoolId], references: [id])
+  userId      String?  @db.ObjectId
+  userName    String?  // denormalised display name
+  userEmail   String?  // denormalised email
+  userRole    String?  // role at time of action
+  action      String   // e.g. CREATE, UPDATE, DELETE, LOGIN, LOGOUT, VIEW, EXPORT
+  entity      String?  // e.g. Student, Result, User
+  entityId    String?  // id of the affected record
+  description String   // human readable summary
+  method      String?  // HTTP method
+  path        String?  // HTTP path
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, userId])
+  @@map("audit_logs")
 }
 
 // ========== ROLE (RBAC – system + admin-created custom roles) ==========

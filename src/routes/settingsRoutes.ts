@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { settingsController } from '../controllers/settingsController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
-router.use(authMiddleware);
+router.use(authMiddleware, privilegeGuard('settings'));
 
 // General
 router.get('/general', settingsController.getGeneral);

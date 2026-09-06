@@ -2,8 +2,36 @@ import prisma from '../config/db';
 import { getCurrentTenantId } from '../utils/tenantContext';
 
 // ---------- Private helpers ----------
-async function computeGrade(score: number): Promise<string> {
-  const scales = await prisma.gradingScale.findMany({ orderBy: { minScore: 'desc' } });
+/**
+ * Compute a grade for a score. If an armId/classId context is provided, the
+ * grading scale group assigned to that class is used; otherwise the school-wide
+ * scales (grades with no group) are used.
+ */
+async function computeGrade(score: number, classId?: string | null): Promise<string> {
+  let scales;
+  if (classId) {
+    const cls = await prisma.class.findUnique({
+      where: { id: classId },
+      select: { gradingScaleGroupId: true },
+    });
+    if (cls?.gradingScaleGroupId) {
+      scales = await prisma.gradingScale.findMany({
+        where: { groupId: cls.gradingScaleGroupId },
+        orderBy: { minScore: 'desc' },
+      });
+    }
+  }
+  if (!scales) {
+    // Fallback: school-wide scale (grades not attached to any group)
+    scales = await prisma.gradingScale.findMany({
+      where: { groupId: null },
+      orderBy: { minScore: 'desc' },
+    });
+    // Legacy compat: if no ungrouped grades exist, fall back to all scales
+    if (scales.length === 0) {
+      scales = await prisma.gradingScale.findMany({ orderBy: { minScore: 'desc' } });
+    }
+  }
   for (const scale of scales) {
     if (score >= scale.minScore && score <= scale.maxScore) {
       return scale.grade;
@@ -37,27 +65,89 @@ async function getOrCreateCbtSubject(): Promise<string> {
 // ---------- Service ----------
 export const academicService = {
   // --- Grading scales ---
+  // Only the school-wide (ungrouped) scales; group-specific grades are served
+  // via /grading-scale-groups and used per-class.
   getGradingScales: () =>
-    prisma.gradingScale.findMany({ orderBy: { minScore: 'desc' } }), // middleware adds schoolId
+    prisma.gradingScale.findMany({
+      where: { groupId: null },
+      orderBy: { minScore: 'desc' },
+    }), // middleware adds schoolId
 
-  saveGradingScales: async (scales: { grade: string; min: number; max: number }[]) => {
+  saveGradingScales: async (
+    scales: { grade: string; min: number; max: number }[],
+    groupId?: string | null
+  ) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    await prisma.gradingScale.deleteMany({
-      where: { schoolId: tenantId },
-    });
+    const where = groupId ? { schoolId: tenantId, groupId } : { schoolId: tenantId, groupId: null };
+    await prisma.gradingScale.deleteMany({ where });
     for (const scale of scales) {
       await prisma.gradingScale.create({
         data: {
           grade: scale.grade,
           minScore: scale.min,
           maxScore: scale.max,
+          groupId: groupId || null,
           schoolId: tenantId,
         },
       });
     }
     return { count: scales.length };
+  },
+
+  // --- Grading scale groups ---
+  getGradingScaleGroups: () =>
+    prisma.gradingScaleGroup.findMany({
+      include: { grades: { orderBy: { minScore: 'desc' } } },
+      orderBy: { createdAt: 'asc' },
+    }),
+
+  createGradingScaleGroup: async (name: string) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+    return prisma.gradingScaleGroup.create({
+      data: { name, schoolId: tenantId },
+      include: { grades: true },
+    });
+  },
+
+  updateGradingScaleGroup: async (id: string, name: string) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+    return prisma.gradingScaleGroup.update({
+      where: { id, schoolId: tenantId },
+      data: { name },
+      include: { grades: { orderBy: { minScore: 'desc' } } },
+    });
+  },
+
+  deleteGradingScaleGroup: async (id: string) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    const group = await prisma.gradingScaleGroup.findFirst({
+      where: { id, schoolId: tenantId },
+      include: { _count: { select: { classes: true } } },
+    });
+    if (!group) throw new Error('Grading scale group not found');
+    if (group._count.classes > 0) {
+      throw new Error(
+        `Cannot delete: ${group._count.classes} class(es) still use this grading scale group`
+      );
+    }
+    await prisma.gradingScale.deleteMany({ where: { groupId: id, schoolId: tenantId } });
+    await prisma.gradingScaleGroup.delete({ where: { id, schoolId: tenantId } });
+    return { success: true };
+  },
+
+  assignGradingScaleGroupToClass: async (classId: string, groupId: string | null) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+    return prisma.class.update({
+      where: { id: classId, schoolId: tenantId },
+      data: { gradingScaleGroupId: groupId },
+    });
   },
 
   // --- Academic Years & Terms ---
@@ -144,7 +234,7 @@ export const academicService = {
     // 1. Get the test (ensure it belongs to the tenant)
     const test = await prisma.test.findUnique({
       where: { id: data.testId, schoolId: tenantId },
-      select: { armId: true, name: true },
+      select: { armId: true, name: true, arm: { select: { classId: true } } },
     });
     if (!test) throw new Error('Test not found');
 
@@ -161,7 +251,7 @@ export const academicService = {
     // 4. Prepare result records
     const resultsData = await Promise.all(attempts.map(async (attempt) => {
       const score = attempt.score;
-      const grade = await computeGrade(score);
+      const grade = await computeGrade(score, test.arm?.classId);
       return {
         studentId: attempt.studentId,
         subjectId,

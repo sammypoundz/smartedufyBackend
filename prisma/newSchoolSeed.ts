@@ -10,9 +10,9 @@ async function main() {
 
   // ---------- Clean up existing data ----------
   console.log('🗑️ Cleaning up existing data...');
-  
+
   // Delete all data from all tables (in correct order - respecting foreign key constraints)
-  
+
   // 1. Delete records that reference schools
   await prisma.message.deleteMany({});
   await prisma.testAttempt.deleteMany({});
@@ -48,11 +48,15 @@ async function main() {
   await prisma.term.deleteMany({});
   await prisma.academicYear.deleteMany({});
   await prisma.globalSetting.deleteMany({});
-  
+  await prisma.roleDef.deleteMany({});
+  await prisma.auditLog.deleteMany({});
+  await prisma.inventoryItem.deleteMany({});
+  await prisma.gradingScaleGroup.deleteMany({});
+
   // Delete BankDetail before School (important!)
   await prisma.bankDetail.deleteMany({});
   console.log('✅ Deleted bank details');
-  
+
   await prisma.school.deleteMany({});
   console.log('✅ Database cleaned');
 

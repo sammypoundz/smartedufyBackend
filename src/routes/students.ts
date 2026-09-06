@@ -23,9 +23,13 @@ router.put('/:id/subjects', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), stu
 router.get('/:id/attendance', authMiddleware, studentController.getStudentAttendance);
 router.get('/:id/fees', authMiddleware, studentController.getStudentFees);
 router.get('/:id/results', authMiddleware, studentController.getStudentResults);
+router.get('/:id/history', authMiddleware, studentController.getStudentHistory);
+router.get('/:id/transcript', authMiddleware, studentController.getStudentTranscript);
 router.post('/:id/assign-parent', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), studentController.assignParent);
 // ✅ NEW: Unassign parent
 router.patch('/:id/unassign-parent', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), studentController.unassignParent);
+
+router.post('/bulk-delete', authMiddleware, roleGuard(['ADMIN']), studentController.bulkDelete);
 
 // ---------- Generic student CRUD (must come after more specific routes) ----------
 router.get('/', authMiddleware, studentController.getAll);
