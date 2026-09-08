@@ -5,9 +5,10 @@ import fs from 'fs';
 // Directories
 const lessonPlanDir = 'uploads/lesson-plans';
 const questionDir = 'uploads/questions';
+const questionDocDir = 'uploads/question-docs';
 
 // Ensure both directories exist
-[lessonPlanDir, questionDir].forEach(dir => {
+[lessonPlanDir, questionDir, questionDocDir].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -53,6 +54,23 @@ const questionFilter = (req: any, file: any, cb: any) => {
   }
 };
 
+// ---------- Question Document Storage & Filter ----------
+const questionDocStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, questionDocDir),
+  filename: (req, file, cb) => {
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname);
+    cb(null, 'qdoc-' + unique + ext);
+  },
+});
+
+const questionDocFilter = (req: any, file: any, cb: any) => {
+  const allowed = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.txt', '.png', '.jpg', '.jpeg'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (allowed.includes(ext)) cb(null, true);
+  else cb(new Error('Invalid file type. Only PDF, DOC, DOCX, PPT, PPTX, TXT and images allowed.'));
+};
+
 // ---------- Export both multer instances ----------
 export const uploadLessonPlan = multer({
   storage: lessonPlanStorage,
@@ -64,6 +82,12 @@ export const uploadQuestion = multer({
   storage: questionStorage,
   fileFilter: questionFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
+
+export const uploadQuestionDoc = multer({
+  storage: questionDocStorage,
+  fileFilter: questionDocFilter,
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
 });
 
 // For backward compatibility (if your existing lesson‑plan routes use `upload`),

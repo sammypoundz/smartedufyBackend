@@ -21,6 +21,7 @@ export const ALL_PRIVILEGES: PagePrivilege[] = [
   { key: "lesson-plan", label: "Lesson Plan", group: "Academic" },
   { key: "timetable", label: "Timetable", group: "Academic" },
   { key: "cbt", label: "CBT", group: "Academic" },
+  { key: "question-review", label: "Question Review", group: "Academic" },
   { key: "academic", label: "Academic Sessions", group: "Academic" },
   // Finance
   { key: "fees", label: "Fees", group: "Finance" },

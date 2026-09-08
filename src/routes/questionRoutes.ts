@@ -7,6 +7,9 @@ import { uploadQuestion } from '../middleware/upload';
 const router = Router();
 
 // ---------- CRUD endpoints ----------
+// Question bank — all questions in the school (ADMIN/TEACHER)
+router.get('/bank', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), questionController.getBank);
+
 // Get all questions for a test – accessible to any authenticated user (including students)
 router.get('/test/:testId', authMiddleware, questionController.getByTestId);
 

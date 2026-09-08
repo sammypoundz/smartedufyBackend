@@ -55,6 +55,7 @@ model School {
   inventoryItems     InventoryItem[]
 
   auditLogs           AuditLog[]
+  questionDocs        QuestionDoc[]
 
   // NEW: Settings models
   promotionRules      PromotionRule[]
@@ -86,6 +87,7 @@ model User {
   payrollEntries Payroll[]
   messagesSent   Message[] @relation("sender")
   auditLogs      AuditLog[]
+  questionDocs   QuestionDoc[]
 
   @@map("users")
 }
@@ -779,6 +781,39 @@ enum LessonPlanStatus {
   DRAFT
   APPROVED
   ARCHIVED
+}
+
+// ========== QUESTION DOCUMENT SUBMISSION ==========
+// Teachers upload exam/question documents (PDF/DOC/DOCX etc.) which are
+// reviewed and approved/rejected by admins before use.
+enum QuestionDocStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model QuestionDoc {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  school      School   @relation(fields: [schoolId], references: [id])
+  teacherId   String   @db.ObjectId // User.id of the uploading teacher
+  teacher     User     @relation(fields: [teacherId], references: [id])
+  title       String
+  description String?
+  subjectName String?
+  className   String?
+  armName     String?  // arm (e.g. JSS 2A) chosen for the class
+  term        String?
+  fileUrl     String
+  fileName    String
+  fileType    String
+  fileSize    Int?
+  status      QuestionDocStatus @default(PENDING)
+  reviewNote  String?  // admin feedback on approval / rejection
+  reviewedBy  String?  @db.ObjectId // User.id of reviewing admin
+  reviewedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 enum Role {

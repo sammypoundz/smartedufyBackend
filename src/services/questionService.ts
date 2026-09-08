@@ -2,6 +2,18 @@ import prisma from '../config/db';
 import { getCurrentTenantId } from '../utils/tenantContext';
 
 export const questionService = {
+  // ---------- QUESTION BANK ----------
+  // All questions in the current school, with their parent test + subject.
+  // schoolId filter is applied automatically by the tenant middleware.
+  getAllForSchool: () =>
+    prisma.question.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        subject: { select: { id: true, name: true } },
+        test: { select: { id: true, name: true, status: true } },
+      },
+    }),
+
   getByTestId: (testId: string) =>
     prisma.question.findMany({
       where: { testId }, // middleware adds schoolId

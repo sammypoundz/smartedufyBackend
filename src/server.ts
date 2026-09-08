@@ -33,6 +33,7 @@ import messageRoutes from './routes/messageRoutes';
 import inventoryRoutes from './routes/inventoryRoutes';
 import settingsRoutes from './routes/settingsRoutes';
 import auditLogRoutes from './routes/auditLogs';
+import questionDocRoutes from './routes/questionDocRoutes';
 
 
 // Import middleware
@@ -104,6 +105,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/settings', settingsRoutes)
 app.use('/api/audit-logs', auditLogRoutes);
+app.use('/api/question-docs', questionDocRoutes);
 
 // Error handler
 app.use(errorHandler);

@@ -6,6 +6,20 @@ import prisma from '../config/db';
 
 export const questionController = {
   /**
+   * GET /questions/bank
+   * Question bank — all questions in the school with test + subject info.
+   */
+  getBank: async (req: Request, res: Response) => {
+    try {
+      const questions = await questionService.getAllForSchool();
+      res.json(questions);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to fetch question bank' });
+    }
+  },
+
+  /**
    * GET /questions/test/:testId
    * Returns all questions for a given test, ordered by creation date.
    * Includes subject relation for frontend grouping.
@@ -31,18 +45,18 @@ export const questionController = {
     try {
       // Log the incoming request body for debugging
       console.log('🔍 Create question - request body:', req.body);
-      
+
       const data = createQuestionSchema.parse(req.body);
       console.log('✅ Parsed question data:', data);
-      
+
       const question = await questionService.create(data);
       console.log('📝 Created question:', { id: question.id, subjectId: question.subjectId });
-      
+
       await prisma.test.update({
         where: { id: data.testId },
         data: { questionCount: { increment: 1 } },
       });
-      
+
       res.status(201).json(question);
     } catch (err: any) {
       if (err.name === 'ZodError') {
@@ -63,13 +77,13 @@ export const questionController = {
     if (!id) return res.status(400).json({ error: 'Invalid id' });
     try {
       console.log('🔍 Update question - request body:', req.body);
-      
+
       const data = updateQuestionSchema.parse(req.body);
       console.log('✅ Parsed update data:', data);
-      
+
       const updated = await questionService.update(id, data);
       if (!updated) return res.status(404).json({ error: 'Question not found' });
-      
+
       console.log('📝 Updated question:', { id: updated.id, subjectId: updated.subjectId });
       res.json(updated);
     } catch (err: any) {
