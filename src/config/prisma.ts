@@ -9,6 +9,7 @@ const TENANT_MODELS = [
   'Skill', 'ArmSkill', 'SubjectSkill',
   'GradingScale', 'GradingScaleGroup', 'AssessmentFormat',
   'Result', 'Attendance', 'TimetableEntry', 'Topic', 'LessonPlan',
+  'TeacherSubjectAssignment', 'TeacherSlotPreference', 'TimetableReview',
   'FeeStructure', 'FeePayment', 'StudentFee',
   'Message', 'Expense', 'Budget', 'Payroll',
   'Test', 'Question', 'TestAttempt',

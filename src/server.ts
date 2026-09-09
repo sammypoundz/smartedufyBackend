@@ -106,6 +106,8 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/settings', settingsRoutes)
 app.use('/api/audit-logs', auditLogRoutes);
 app.use('/api/question-docs', questionDocRoutes);
+import timetableWorkflowRoutes from './routes/timetableWorkflowRoutes';
+app.use('/api/timetable-workflow', timetableWorkflowRoutes);
 
 // Error handler
 app.use(errorHandler);

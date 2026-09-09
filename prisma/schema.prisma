@@ -34,6 +34,9 @@ model School {
   attendances        Attendance[]
   timetableEntries   TimetableEntry[]
   results            Result[]
+  teacherSubjectAssignments TeacherSubjectAssignment[]
+  teacherSlotPreferences    TeacherSlotPreference[]
+  timetableReviews          TimetableReview[]
   gradingScales      GradingScale[]
   gradingScaleGroups GradingScaleGroup[]
   assessmentFormats  AssessmentFormat[]
@@ -157,6 +160,7 @@ model Teacher {
   subjects    SubjectTeacher[]
   arms        Arm[]
   subjectArms SubjectArm[]
+  timetableAssignments TeacherSubjectAssignment[]
 }
 
 // ========== CLASS ==========
@@ -193,6 +197,8 @@ model Arm {
   students       Student[]
   subjects       SubjectArm[]
   timetable      TimetableEntry[]
+  teacherAssignments TeacherSubjectAssignment[]
+  timetableReview    TimetableReview?
   skills         ArmSkill[]
   topics         Topic[]
   lessonPlans    LessonPlan[]
@@ -215,12 +221,72 @@ model Subject {
   teachers        SubjectTeacher[]
   arms            SubjectArm[]
   timetable       TimetableEntry[]
+  teacherAssignments TeacherSubjectAssignment[]
   results         Result[]
   studentSubjects StudentSubject[]
   topics          Topic[]
   skills          SubjectSkill[]
   lessonPlans     LessonPlan[]
   questions       Question[]
+}
+
+// ========== TIMETABLE WORKFLOW ==========
+
+// Step 1 — Admin assigns each subject-arm to a teacher with allowed teaching
+// days and the number of periods required per week.
+model TeacherSubjectAssignment {
+  id             String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String  @db.ObjectId
+  school         School  @relation(fields: [schoolId], references: [id])
+  subjectId      String  @db.ObjectId
+  armId          String  @db.ObjectId
+  teacherId      String  @db.ObjectId
+  allowedDays    String[]             // e.g. ["Monday", "Wednesday"]
+  periodsPerWeek Int     @default(1)
+  createdAt      DateTime? @default(now())
+
+  teacher   Teacher @relation(fields: [teacherId], references: [id])
+  subject   Subject @relation(fields: [subjectId], references: [id])
+  arm       Arm     @relation(fields: [armId], references: [id])
+  slots     TeacherSlotPreference[]
+
+  @@unique([schoolId, subjectId, armId])
+}
+
+// Step 2/3 — Teacher-submitted available time slots for one assignment.
+// Uniqueness on (assignment, day, slot) prevents double-picking their own
+// slots; cross-assignment conflicts are validated in the API.
+model TeacherSlotPreference {
+  id           String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId     String  @db.ObjectId
+  school       School  @relation(fields: [schoolId], references: [id])
+  assignmentId String  @db.ObjectId
+  dayOfWeek    String
+  timeSlot     String
+  createdAt    DateTime? @default(now())
+
+  assignment TeacherSubjectAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, dayOfWeek, timeSlot])
+}
+
+// Step 5/6 — Review/lock state of the timetable workflow for one arm.
+model TimetableReview {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String    @db.ObjectId
+  school         School    @relation(fields: [schoolId], references: [id])
+  armId          String    @db.ObjectId
+  status         String    @default("DRAFT") // DRAFT | PENDING_REVIEW | CHANGES_REQUESTED | APPROVED
+  reviewNote     String?
+  requestedChanges String?
+  reviewedBy     String?   @db.ObjectId
+  reviewedAt     DateTime?
+  lockedAt       DateTime? // set when status becomes APPROVED
+  createdAt      DateTime? @default(now())
+
+  arm Arm @relation(fields: [armId], references: [id])
+
+  @@unique([armId])
 }
 
 // ========== SUBJECT TEACHER (join) ==========
@@ -330,6 +396,7 @@ model TimetableEntry {
   dayOfWeek String
   timeSlot  String
   subjectId String? @db.ObjectId
+  linkedAssignmentId String? @db.ObjectId // TeacherSubjectAssignment this entry was compiled from
 
   arm     Arm      @relation(fields: [armId], references: [id])
   subject Subject? @relation(fields: [subjectId], references: [id])
