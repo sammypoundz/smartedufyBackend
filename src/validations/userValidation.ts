@@ -8,6 +8,9 @@ export const createUserSchema = z.object({
   isActive: z.boolean().default(true),
   roles: z.array(z.string()).default([]),
   allowedPages: z.array(z.string()).default([]),
+  // Auto ID (default) or manual custom ID
+  idMode: z.enum(['AUTO', 'MANUAL']).default('AUTO'),
+  customId: z.string().max(60).optional(),
 });
 
 export const updateUserSchema = z.object({

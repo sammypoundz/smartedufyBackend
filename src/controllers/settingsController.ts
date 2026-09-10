@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { settingsService } from '../services/settingsService';
+import { idGeneratorService } from '../services/idGeneratorService';
 import {
   updateGeneralSettingsSchema,
   updateAcademicSettingsSchema,
@@ -12,6 +13,7 @@ import {
   updateNotificationSettingsSchema,
   updateSecuritySettingsSchema,
   updateBackupSettingsSchema,
+  idGeneratorConfigSchema,
 } from '../validations/settingsValidation';
 
 // Helper to get validated ID from params
@@ -249,6 +251,37 @@ export const settingsController = {
       if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
       console.error(err);
       res.status(500).json({ error: 'Failed to update backup settings' });
+    }
+  },
+
+  // ----- ID Generator -----
+  getIdGeneratorConfigs: async (req: AuthRequest, res: Response) => {
+    try {
+      const configs = await idGeneratorService.getAllConfigs();
+      res.json(configs);
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to fetch ID generator configs' });
+    }
+  },
+  saveIdGeneratorConfig: async (req: AuthRequest, res: Response) => {
+    try {
+      const data = idGeneratorConfigSchema.parse(req.body);
+      const config = await idGeneratorService.saveConfig(data);
+      res.json(config);
+    } catch (err: any) {
+      if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
+      res.status(400).json({ error: err.message || 'Failed to save ID generator config' });
+    }
+  },
+  previewNextId: async (req: AuthRequest, res: Response) => {
+    try {
+      const role = String(req.query.role || '');
+      if (!role) return res.status(400).json({ error: 'role is required' });
+      res.json(await idGeneratorService.previewNextId(role));
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to preview next ID' });
     }
   },
 };

@@ -64,6 +64,7 @@ model School {
   promotionRules      PromotionRule[]
   reportCardTemplates ReportCardTemplate[]
   bankDetail          BankDetail? // one-to-one (unique constraint on schoolId)
+  idGeneratorConfigs  IdGeneratorConfig[]
 }
 
 // ========== USER ==========
@@ -76,6 +77,8 @@ model User {
   phone        String?
   password     String
   isActive     Boolean  @default(true)
+  // Auto-generated or manually assigned ID (e.g. STU-2025-0001), unique per school.
+  userIdCode   String?
   role         Role     @default(STUDENT)
   // Multi-role support: all roles held by this user (system + custom).
   roles        String[] @default([])
@@ -93,6 +96,7 @@ model User {
   questionDocs   QuestionDoc[]
 
   @@map("users")
+  @@index([schoolId, userIdCode])
 }
 
 // ========== STUDENT ==========
@@ -193,6 +197,11 @@ model Arm {
 
   class   Class    @relation(fields: [classId], references: [id])
   teacher Teacher? @relation(fields: [teacherId], references: [id])
+
+  // Ordered period layout for this arm, e.g. ["8:00–8:45", "Break", "10:30–11:15"].
+  // Slots whose name marks them as a break (break/lunch/recess) are treated as
+  // non-instructional: no subject entries may exist on them.
+  timeSlots String[] @default([])
 
   students       Student[]
   subjects       SubjectArm[]
@@ -797,6 +806,26 @@ model ReportCardTemplate {
   updatedAt   DateTime @updatedAt
 
   @@map("report_card_templates")
+}
+
+// ========== ID GENERATOR ==========
+// Per-role auto ID configuration, e.g. format "STU-{YEAR}-{####}" with
+// counter 42. One row per (school, role). {####} = zero-padded counter,
+// {YEAR} = 4-digit year, {ROLE} = role name. Concurrency-safe: the counter
+// is advanced inside a transaction with a read-your-write upsert.
+model IdGeneratorConfig {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String   @db.ObjectId
+  school         School   @relation(fields: [schoolId], references: [id])
+  role           String   // STUDENT | TEACHER | PARENT | ADMIN | PRINCIPAL | ...
+  format         String   @default("{ROLE}-{####}") // e.g. STU-{YEAR}-{####}
+  counter        Int      @default(0) // last used number for this role
+  lastResetYear  Int?     // year of last {YEAR}-counter reset (yearly reset support)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([schoolId, role])
+  @@map("id_generator_configs")
 }
 
 // ========== BANK DETAILS ==========

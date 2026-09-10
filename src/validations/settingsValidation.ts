@@ -54,6 +54,14 @@ export const updateBackupSettingsSchema = z.object({
   autoBackup: z.boolean().optional(),
 });
 
+// ----- ID Generator -----
+export const idGeneratorConfigSchema = z.object({
+  role: z.string().min(1).max(50),
+  format: z.string().min(1).max(60),
+  counter: z.number().int().min(0).optional(),
+  resetCounter: z.boolean().optional(),
+});
+
 // ----- Route Parameter Validation (optional but useful) -----
 export const idParamSchema = z.object({
   id: z.string().min(1, 'ID is required'),

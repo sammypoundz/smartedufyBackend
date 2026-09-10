@@ -1,6 +1,7 @@
 import prisma from '../config/db';
 import bcrypt from 'bcryptjs';
 import { getCurrentTenantId } from '../utils/tenantContext';
+import { idGeneratorService } from './idGeneratorService';
 
 export const userService = {
   getAllUsers: async () => {
@@ -95,11 +96,24 @@ export const userService = {
     isActive: boolean;
     roles?: string[];
     allowedPages?: string[];
+    idMode?: 'AUTO' | 'MANUAL';
+    customId?: string;
   }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
     const hashedPassword = await bcrypt.hash(data.password, 10);
+
+    // ----- Auto / Manual ID assignment (before the transaction so duplicate
+    // errors surface early; the manual path also bumps the role counter) -----
+    let userIdCode: string | undefined;
+    if (data.idMode === 'MANUAL' && data.customId?.trim()) {
+      // Throws when the ID is already in use; bumps the counter if higher.
+      userIdCode = await idGeneratorService.registerManualId(data.role, data.customId);
+    } else {
+      // AUTO (default): atomically claim the next ID for this role.
+      userIdCode = await idGeneratorService.claimNextId(data.role);
+    }
 
     // Create the user AND its role-specific profile row atomically so all
     // necessary tables are populated (data integrity).
@@ -114,6 +128,7 @@ export const userService = {
           isActive: data.isActive,
           allowedPages: data.allowedPages || [],
           schoolId: tenantId, // 👈 required
+          userIdCode,
         },
       });
 
@@ -144,6 +159,7 @@ export const userService = {
             gender: '',
             userId: created.id,
             schoolId: tenantId,
+            admissionNumber: userIdCode,
           },
         });
       }
@@ -165,19 +181,20 @@ export const userService = {
     else if (user.role === 'TEACHER' && user.teacher) displayName = user.teacher.name;
     else if (user.role === 'PARENT' && user.parent) displayName = user.parent.name;
 
-    return {
-      id: user.id,
-      name: displayName,
-      email: user.email,
-      role: user.role,
-      roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
-      isActive: user.isActive,
-      allowedPages: user.allowedPages || [],
-      createdAt: user.createdAt,
-    };
-  },
+        return {
+        id: user.id,
+        name: displayName,
+        email: user.email,
+        role: user.role,
+        roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
+        isActive: user.isActive,
+        allowedPages: user.allowedPages || [],
+        userIdCode: user.userIdCode,
+        createdAt: user.createdAt,
+      };
+    },
 
-  updateUser: async (id: string, data: Partial<{
+    updateUser: async (id: string, data: Partial<{
     name: string;
     email: string;
     password: string;

@@ -6,6 +6,7 @@ import { registerSchema, loginSchema } from '../validations/authValidation';
 import { authMiddleware } from '../middleware/auth';
 import { resolvePrivileges } from './roles';
 import { logActivity } from '../services/auditService';
+import { idGeneratorService } from '../services/idGeneratorService';
 
 const router = Router();
 
@@ -24,6 +25,16 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid school' });
     }
 
+    // ----- Auto / Manual ID assignment (AUTO is the default) -----
+    const idMode = (data as any).idMode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+    const customId = (data as any).customId;
+    let userIdCode: string | undefined;
+    if (idMode === 'MANUAL' && customId?.trim()) {
+      userIdCode = await idGeneratorService.registerManualId(data.role, customId);
+    } else {
+      userIdCode = await idGeneratorService.claimNextId(data.role);
+    }
+
     // Create the user and their role-specific profile record atomically
     // so all necessary tables are populated together.
     const user = await prisma.$transaction(async (tx) => {
@@ -35,6 +46,7 @@ router.post('/register', async (req, res, next) => {
           role: data.role as any,
           isActive: true,
           schoolId,
+          userIdCode,
         },
       });
 
@@ -49,6 +61,7 @@ router.post('/register', async (req, res, next) => {
             classId: data.classId || '',
             armId: data.armId || '',
             schoolId,
+            admissionNumber: userIdCode,
           },
         });
       } else if (data.role === 'TEACHER') {
@@ -93,6 +106,7 @@ router.post('/register', async (req, res, next) => {
         isActive: user.isActive,
         schoolId,
         allowedPages: user.allowedPages || [],
+        userIdCode: user.userIdCode,
       },
     });
   } catch (err) {

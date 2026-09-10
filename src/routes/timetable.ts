@@ -12,6 +12,13 @@ const TIMETABLE_ADMINS = ['ADMIN', 'PRINCIPAL', 'VICE_PRINCIPAL'];
 // Get timetable for an arm (grouped by day)
 router.get('/arm/:armId', authMiddleware, timetableController.getByArm);
 
+// Time slot layout for an arm (any authenticated user can read)
+router.get('/arm/:armId/time-slots', authMiddleware, timetableController.getTimeSlots);
+
+// Save the time slot layout for an arm (admin only) — recomputes the timetable
+// so break/removed slots can never hold classes
+router.put('/arm/:armId/time-slots', authMiddleware, roleGuard(TIMETABLE_ADMINS), timetableController.updateTimeSlots);
+
 // Bulk replace the entire timetable for an arm (admin only) – using PUT for idempotency
 router.put('/arm/:armId', authMiddleware, roleGuard(TIMETABLE_ADMINS), timetableController.replace);
 

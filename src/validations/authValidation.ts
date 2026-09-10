@@ -12,6 +12,9 @@ export const registerSchema = z.object({
   classId: z.string().optional(),
   armId: z.string().optional(),
   phone: z.string().optional(),
+  // Auto ID (default) or manual custom ID
+  idMode: z.enum(['AUTO', 'MANUAL']).default('AUTO'),
+  customId: z.string().max(60).optional(),
 });
 
 export const loginSchema = z.object({

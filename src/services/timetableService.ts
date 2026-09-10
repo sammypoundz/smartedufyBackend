@@ -165,3 +165,62 @@ export const timetableService = {
     });
   },
 };
+// ========== TIME SLOT LAYOUT ==========
+// Slots whose name marks them as a non-instructional break period.
+// Mirrors isBreakSlot() on the frontend so both sides agree.
+const BREAK_KEYWORDS = ['break', 'lunch', 'recess'];
+export const isBreakSlot = (slot: string) => {
+  const s = (slot || '').trim().toLowerCase();
+  return BREAK_KEYWORDS.some(k => s.includes(k));
+};
+
+export const timeSlotService = {
+  // Get the ordered slot layout for an arm. Falls back to [] when the arm
+  // has never had a custom layout saved (frontend then uses its default).
+  getForArm: async (armId: string): Promise<string[]> => {
+    const arm = await prisma.arm.findUnique({
+      where: { id: armId },
+      select: { timeSlots: true },
+    });
+    return arm?.timeSlots ?? [];
+  },
+
+  /**
+   * Save the ordered slot layout for an arm and recompute the timetable:
+   * any existing timetable entries on slots that were removed, renamed away,
+   * or that are break slots are deleted — break slots are always off for
+   * classes and can never hold a subject.
+   */
+  setForArm: async (armId: string, slots: string[]): Promise<{ timeSlots: string[]; removedEntries: number }> => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    const cleaned = slots.map(s => s.trim()).filter(Boolean);
+    const lowered = cleaned.map(s => s.toLowerCase());
+    if (new Set(lowered).size !== cleaned.length) {
+      throw new Error('Duplicate time slot names are not allowed');
+    }
+
+    const validSlots = new Set(cleaned);
+    const breakSlots = cleaned.filter(isBreakSlot);
+
+    // Entries that must go: break slots, renamed/removed slots, or any
+    // subject entry that somehow sits on a break slot.
+    const deleteWhere = {
+      armId,
+      schoolId: tenantId,
+      OR: [
+        { timeSlot: { nin: cleaned } },                 // slot no longer exists
+        { timeSlot: { in: breakSlots } },               // break slots hold no classes
+        { subjectId: null },                            // orphaned empty entries
+      ],
+    };
+
+    const result = await prisma.$transaction([
+      prisma.timetableEntry.deleteMany({ where: deleteWhere }),
+      prisma.arm.update({ where: { id: armId }, data: { timeSlots: cleaned } }),
+    ]);
+
+    return { timeSlots: cleaned, removedEntries: result[0].count };
+  },
+};

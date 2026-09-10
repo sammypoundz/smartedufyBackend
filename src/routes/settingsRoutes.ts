@@ -42,6 +42,11 @@ router.put('/security', roleGuard(['ADMIN']), settingsController.updateSecurityS
 router.get('/backup', settingsController.getBackupSettings);
 router.put('/backup', roleGuard(['ADMIN']), settingsController.updateBackupSettings);
 
+// ID Generator (config + preview; next-ID claiming happens during registration)
+router.get('/id-generator', settingsController.getIdGeneratorConfigs);
+router.put('/id-generator', roleGuard(['ADMIN']), settingsController.saveIdGeneratorConfig);
+router.get('/id-generator/preview', settingsController.previewNextId);
+
 // Data integrity: audit & repair subject/teacher/class/student assignment links
 router.post('/reconcile-data', roleGuard(['ADMIN']), async (req, res) => {
   try {

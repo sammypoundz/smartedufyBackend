@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { timetableService } from '../services/timetableService';
-import { bulkTimetableSchema } from '../validations/timetableValidation';
+import { timetableService, timeSlotService } from '../services/timetableService';
+import { bulkTimetableSchema, timeSlotsSchema } from '../validations/timetableValidation';
 import { getStringParam } from '../utils/paramUtils';
 import { z } from 'zod';
 
@@ -61,6 +61,39 @@ export const timetableController = {
         return res.status(400).json({ error: err.errors });
       }
       res.status(500).json({ error: 'Failed to update timetable entry' });
+    }
+  },
+
+  // Get the ordered time slot layout for an arm
+  getTimeSlots: async (req: Request, res: Response) => {
+    const armId = getStringParam(req.params.armId);
+    if (!armId) return res.status(400).json({ error: 'Invalid armId' });
+    try {
+      res.json({ timeSlots: await timeSlotService.getForArm(armId) });
+    } catch (err: any) {
+      console.error('Get time slots error:', err);
+      res.status(500).json({ error: 'Failed to fetch time slots' });
+    }
+  },
+
+  // Save the ordered time slot layout for an arm (admin only).
+  // Recomputes the timetable: removed slots and break slots can never hold classes.
+  updateTimeSlots: async (req: Request, res: Response) => {
+    const armId = getStringParam(req.params.armId);
+    if (!armId) return res.status(400).json({ error: 'Invalid armId' });
+    try {
+      const { timeSlots } = timeSlotsSchema.parse(req.body);
+      const result = await timeSlotService.setForArm(armId, timeSlots);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Update time slots error:', err);
+      if (err.name === 'ZodError') {
+        return res.status(400).json({ error: err.errors });
+      }
+      if (err.message && err.message.includes('Duplicate')) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: 'Failed to update time slots' });
     }
   },
 

@@ -2,8 +2,21 @@ import { Request, Response } from 'express';
 import { userService } from '../services/userService';
 import { createUserSchema, updateUserSchema, updateStatusSchema } from '../validations/userValidation';
 import { getStringParam } from '../utils/paramUtils';
+import { idGeneratorService } from '../services/idGeneratorService';
 
 export const userController = {
+  // Preview the next auto-generated ID for a role (does NOT consume it)
+  getNextId: async (req: Request, res: Response) => {
+    try {
+      const role = String(req.query.role || '');
+      if (!role) return res.status(400).json({ error: 'role is required' });
+      res.json(await idGeneratorService.previewNextId(role));
+    } catch (err: any) {
+      console.error('Preview next ID error:', err);
+      res.status(500).json({ error: 'Failed to preview next ID' });
+    }
+  },
+
   getAllUsers: async (req: Request, res: Response) => {
     try {
       const users = await userService.getAllUsers();
@@ -46,6 +59,9 @@ export const userController = {
     } catch (err: any) {
       if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
       if (err.code === 'P2002') return res.status(409).json({ error: 'Email already exists' });
+      if (err.message && err.message.includes('already in use')) {
+        return res.status(409).json({ error: err.message });
+      }
       console.error(err);
       res.status(500).json({ error: 'Failed to create user' });
     }
