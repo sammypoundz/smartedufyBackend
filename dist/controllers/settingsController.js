@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsController = void 0;
 const settingsService_1 = require("../services/settingsService");
+const idGeneratorService_1 = require("../services/idGeneratorService");
 const settingsValidation_1 = require("../validations/settingsValidation");
 // Helper to get validated ID from params
 const getParamId = (id) => {
@@ -266,6 +267,41 @@ exports.settingsController = {
                 return res.status(400).json({ error: err.errors });
             console.error(err);
             res.status(500).json({ error: 'Failed to update backup settings' });
+        }
+    },
+    // ----- ID Generator -----
+    getIdGeneratorConfigs: async (req, res) => {
+        try {
+            const configs = await idGeneratorService_1.idGeneratorService.getAllConfigs();
+            res.json(configs);
+        }
+        catch (err) {
+            console.error(err);
+            res.status(500).json({ error: 'Failed to fetch ID generator configs' });
+        }
+    },
+    saveIdGeneratorConfig: async (req, res) => {
+        try {
+            const data = settingsValidation_1.idGeneratorConfigSchema.parse(req.body);
+            const config = await idGeneratorService_1.idGeneratorService.saveConfig(data);
+            res.json(config);
+        }
+        catch (err) {
+            if (err.name === 'ZodError')
+                return res.status(400).json({ error: err.errors });
+            res.status(400).json({ error: err.message || 'Failed to save ID generator config' });
+        }
+    },
+    previewNextId: async (req, res) => {
+        try {
+            const role = String(req.query.role || '');
+            if (!role)
+                return res.status(400).json({ error: 'role is required' });
+            res.json(await idGeneratorService_1.idGeneratorService.previewNextId(role));
+        }
+        catch (err) {
+            console.error(err);
+            res.status(500).json({ error: 'Failed to preview next ID' });
         }
     },
 };

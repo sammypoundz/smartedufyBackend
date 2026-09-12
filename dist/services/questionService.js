@@ -7,6 +7,16 @@ exports.questionService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const tenantContext_1 = require("../utils/tenantContext");
 exports.questionService = {
+    // ---------- QUESTION BANK ----------
+    // All questions in the current school, with their parent test + subject.
+    // schoolId filter is applied automatically by the tenant middleware.
+    getAllForSchool: () => db_1.default.question.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+            subject: { select: { id: true, name: true } },
+            test: { select: { id: true, name: true, status: true } },
+        },
+    }),
     getByTestId: (testId) => db_1.default.question.findMany({
         where: { testId }, // middleware adds schoolId
         orderBy: { createdAt: 'asc' },

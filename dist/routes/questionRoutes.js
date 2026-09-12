@@ -7,6 +7,8 @@ const roleGuard_1 = require("../middleware/roleGuard");
 const upload_1 = require("../middleware/upload");
 const router = (0, express_1.Router)();
 // ---------- CRUD endpoints ----------
+// Question bank — all questions in the school (ADMIN/TEACHER)
+router.get('/bank', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), questionController_1.questionController.getBank);
 // Get all questions for a test – accessible to any authenticated user (including students)
 router.get('/test/:testId', auth_1.authMiddleware, questionController_1.questionController.getByTestId);
 // Create, update, delete, and upload are restricted to ADMIN/TEACHER only

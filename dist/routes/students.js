@@ -20,9 +20,12 @@ router.put('/:id/subjects', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['
 router.get('/:id/attendance', auth_1.authMiddleware, studentController_1.studentController.getStudentAttendance);
 router.get('/:id/fees', auth_1.authMiddleware, studentController_1.studentController.getStudentFees);
 router.get('/:id/results', auth_1.authMiddleware, studentController_1.studentController.getStudentResults);
+router.get('/:id/history', auth_1.authMiddleware, studentController_1.studentController.getStudentHistory);
+router.get('/:id/transcript', auth_1.authMiddleware, studentController_1.studentController.getStudentTranscript);
 router.post('/:id/assign-parent', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), studentController_1.studentController.assignParent);
 // ✅ NEW: Unassign parent
 router.patch('/:id/unassign-parent', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), studentController_1.studentController.unassignParent);
+router.post('/bulk-delete', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), studentController_1.studentController.bulkDelete);
 // ---------- Generic student CRUD (must come after more specific routes) ----------
 router.get('/', auth_1.authMiddleware, studentController_1.studentController.getAll);
 router.get('/:id', auth_1.authMiddleware, studentController_1.studentController.getById);

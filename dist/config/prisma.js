@@ -9,12 +9,14 @@ const TENANT_MODELS = [
     'User', 'Student', 'Teacher', 'Parent', 'Class', 'Arm', 'Subject',
     'SubjectArm', 'SubjectTeacher', 'StudentSubject',
     'Skill', 'ArmSkill', 'SubjectSkill',
-    'GradingScale', 'AssessmentFormat',
+    'GradingScale', 'GradingScaleGroup', 'AssessmentFormat',
     'Result', 'Attendance', 'TimetableEntry', 'Topic', 'LessonPlan',
+    'TeacherSubjectAssignment', 'TeacherSlotPreference', 'TimetableReview',
     'FeeStructure', 'FeePayment', 'StudentFee',
     'Message', 'Expense', 'Budget', 'Payroll',
     'Test', 'Question', 'TestAttempt',
     'StudentPromotionHistory', 'AcademicYear', 'Term',
+    'ParentStudentLink',
 ];
 const prisma = new client_1.PrismaClient();
 exports.prisma = prisma;

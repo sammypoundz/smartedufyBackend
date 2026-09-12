@@ -17,6 +17,7 @@ exports.ALL_PRIVILEGES = [
     { key: "lesson-plan", label: "Lesson Plan", group: "Academic" },
     { key: "timetable", label: "Timetable", group: "Academic" },
     { key: "cbt", label: "CBT", group: "Academic" },
+    { key: "question-review", label: "Question Review", group: "Academic" },
     { key: "academic", label: "Academic Sessions", group: "Academic" },
     // Finance
     { key: "fees", label: "Fees", group: "Finance" },
@@ -32,6 +33,7 @@ exports.ALL_PRIVILEGES = [
     { key: "roles", label: "Roles & Privileges", group: "Administration" },
     { key: "inventory", label: "Inventory", group: "Administration" },
     { key: "settings", label: "Settings", group: "Administration" },
+    { key: "audit-logs", label: "Audit Logs", group: "Administration" },
 ];
 // Default privilege sets attached to system roles. Any user holding the
 // role inherits these; admins can still grant extra privileges per user

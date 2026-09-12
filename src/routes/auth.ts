@@ -4,11 +4,27 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../config/prisma';
 import { registerSchema, loginSchema } from '../validations/authValidation';
 import { authMiddleware } from '../middleware/auth';
+import { runWithTenant } from '../utils/tenantContext';
 import { resolvePrivileges } from './roles';
 import { logActivity } from '../services/auditService';
 import { idGeneratorService } from '../services/idGeneratorService';
 
 const router = Router();
+
+// Public: list active schools for the teacher registration page's
+// school picker (no auth required – only exposes id + name).
+router.get('/schools', async (_req, res, next) => {
+  try {
+    const schools = await prisma.school.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ schools });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Register a new user (staff/admin – not for students)
 router.post('/register', async (req, res, next) => {
@@ -20,30 +36,43 @@ router.post('/register', async (req, res, next) => {
     if (!schoolId) {
       return res.status(400).json({ error: 'schoolId is required' });
     }
+    // Friendly duplicate-email error instead of a raw Prisma unique violation
+    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    if (existing) {
+      return res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
+    }
     const school = await prisma.school.findUnique({ where: { id: schoolId } });
     if (!school) {
       return res.status(400).json({ error: 'Invalid school' });
     }
 
     // ----- Auto / Manual ID assignment (AUTO is the default) -----
-    const idMode = (data as any).idMode === 'MANUAL' ? 'MANUAL' : 'AUTO';
-    const customId = (data as any).customId;
-    let userIdCode: string | undefined;
-    if (idMode === 'MANUAL' && customId?.trim()) {
-      userIdCode = await idGeneratorService.registerManualId(data.role, customId);
-    } else {
-      userIdCode = await idGeneratorService.claimNextId(data.role);
-    }
-
     // Create the user and their role-specific profile record atomically
     // so all necessary tables are populated together.
-    const user = await prisma.$transaction(async (tx) => {
+    // Auth routes are public (mounted before the global tenant middleware),
+    // so we establish the tenant context explicitly — the ID generator reads
+    // the tenant via AsyncLocalStorage and would otherwise throw
+    // "Tenant context missing".
+    const user = await runWithTenant(schoolId, async () => {
+      const idMode = (data as any).idMode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+      const customId = (data as any).customId;
+      let userIdCode: string | undefined;
+      if (idMode === 'MANUAL' && customId?.trim()) {
+        userIdCode = await idGeneratorService.registerManualId(data.role, customId);
+      } else {
+        userIdCode = await idGeneratorService.claimNextId(data.role);
+      }
+
+      return prisma.$transaction(async (tx) => {
       const createdUser = await tx.user.create({
         data: {
           name: data.name,
           email: data.email,
           password: hashedPassword,
           role: data.role as any,
+          // Self-registered teachers may log in to complete their profile
+          // setup, but their registration stays PENDING until an admin
+          // approves it (see teacherRegistrationService.approve).
           isActive: true,
           schoolId,
           userIdCode,
@@ -70,8 +99,10 @@ router.post('/register', async (req, res, next) => {
             userId: createdUser.id,
             name: data.name,
             email: data.email,
+            gender: data.gender || null,
             phone: data.phone || '',
             schoolId,
+            registrationStatus: 'PENDING',
           },
         });
       } else if (data.role === 'PARENT') {
@@ -87,6 +118,7 @@ router.post('/register', async (req, res, next) => {
       }
 
       return createdUser;
+      });
     });
 
     const token = jwt.sign(
@@ -135,7 +167,13 @@ router.post('/login', async (req, res, next) => {
       return res.status(403).json({ error: 'Your student account is suspended. Contact admin.' });
     }
     if (user.role === 'TEACHER' && user.teacher && !user.teacher.isActive) {
-      return res.status(403).json({ error: 'Your teacher account is suspended. Contact admin.' });
+      const status = user.teacher.registrationStatus;
+      return res.status(403).json({
+        error:
+          status === 'REJECTED'
+            ? 'Your registration was rejected. Contact the school admin.'
+            : 'Your teacher account is suspended. Contact admin.',
+      });
     }
     if (!user.isActive) {
       return res.status(403).json({ error: 'Your account is inactive. Contact admin.' });
@@ -290,6 +328,7 @@ router.get('/me', authMiddleware, async (req, res, next) => {
       allowedPages: user.allowedPages || [],
       isActive: user.isActive,
       schoolId: user.schoolId,
+      school: user.school,
       profile,
     });
   } catch (err) {

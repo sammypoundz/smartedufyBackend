@@ -157,6 +157,9 @@ exports.studentController = {
             console.error('Create student error:', err);
             if (err.name === 'ZodError')
                 return res.status(400).json({ error: err.errors });
+            if (typeof err.message === 'string' && err.message.includes('already exists')) {
+                return res.status(409).json({ error: err.message });
+            }
             res.status(500).json({ error: 'Failed to create student' });
         }
     },
@@ -207,6 +210,20 @@ exports.studentController = {
         catch (err) {
             console.error('Delete student error:', err);
             res.status(500).json({ error: 'Failed to delete student' });
+        }
+    },
+    bulkDelete: async (req, res) => {
+        const ids = req.body?.ids;
+        if (!Array.isArray(ids) || ids.length === 0 || !ids.every((i) => typeof i === 'string')) {
+            return res.status(400).json({ error: 'ids must be a non-empty array of student ids' });
+        }
+        try {
+            const result = await studentService_1.studentService.deleteMany(ids);
+            res.json({ message: `Deleted ${result.deleted} student(s)`, ...result });
+        }
+        catch (err) {
+            console.error('Bulk delete students error:', err);
+            res.status(500).json({ error: 'Failed to delete students' });
         }
     },
     assignParent: async (req, res) => {
@@ -340,6 +357,32 @@ exports.studentController = {
         catch (err) {
             console.error('Get student results error:', err);
             res.status(500).json({ error: 'Failed to fetch results' });
+        }
+    },
+    getStudentHistory: async (req, res) => {
+        const id = (0, paramUtils_1.getStringParam)(req.params.id);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid student id' });
+        try {
+            const history = await studentService_1.studentService.getStudentHistory(id);
+            res.json(history);
+        }
+        catch (err) {
+            console.error('Get student history error:', err);
+            res.status(500).json({ error: 'Failed to fetch promotion history' });
+        }
+    },
+    getStudentTranscript: async (req, res) => {
+        const id = (0, paramUtils_1.getStringParam)(req.params.id);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid student id' });
+        try {
+            const transcript = await studentService_1.studentService.getStudentTranscript(id);
+            res.json(transcript);
+        }
+        catch (err) {
+            console.error('Get student transcript error:', err);
+            res.status(500).json({ error: 'Failed to generate transcript' });
         }
     },
 };

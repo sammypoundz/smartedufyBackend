@@ -1,21 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.roleGuard = void 0;
-const roleGuard = (allowedRoles) => {
-    return (req, res, next) => {
-        if (!req.user) {
-            return res.status(401).json({ error: 'Unauthorized' });
-        }
-        // Convert both to lowercase for case‑insensitive comparison
-        const userRole = req.user.role.toLowerCase();
-        const hasRole = allowedRoles.some(role => role.toLowerCase() === userRole);
-        if (!hasRole) {
-            return res.status(403).json({
-                error: 'Forbidden',
-                message: `Required roles: ${allowedRoles.join(', ')}`,
-            });
-        }
-        next();
-    };
-};
-exports.roleGuard = roleGuard;
+exports.privilegeGuard = exports.roleGuard = void 0;
+// Kept for backward compatibility – roleGuard now lives in auth.ts and
+// supports multi-role users + privilege-based guards.
+var auth_1 = require("./auth");
+Object.defineProperty(exports, "roleGuard", { enumerable: true, get: function () { return auth_1.roleGuard; } });
+Object.defineProperty(exports, "privilegeGuard", { enumerable: true, get: function () { return auth_1.privilegeGuard; } });

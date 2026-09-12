@@ -22,6 +22,7 @@ model School {
   students           Student[]
   teachers           Teacher[]
   parents            Parent[]
+  parentStudentLinks ParentStudentLink[]
   classes            Class[]
   arms               Arm[]
   subjects           Subject[]
@@ -131,6 +132,7 @@ model Student {
   testAttempts     TestAttempt[]
   feePayments      FeePayment[]
   assignedFees     StudentFee[]
+  linkRequests     ParentStudentLink[]
 }
 
 // ========== PARENT ==========
@@ -145,7 +147,36 @@ model Parent {
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId
 
-  children Student[]
+  children      Student[]
+  linkRequests  ParentStudentLink[]
+}
+
+// ========== PARENT–STUDENT LINK REQUESTS (mirrors Timetable workflow states) ==========
+// Parents request to link a student to their account; admins approve/reject.
+// Status flow: PENDING_REVIEW -> APPROVED | REJECTED | CHANGES_REQUESTED
+model ParentStudentLink {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String    @db.ObjectId
+  school         School    @relation(fields: [schoolId], references: [id])
+
+  parentId       String    @db.ObjectId
+  parent         Parent    @relation(fields: [parentId], references: [id])
+
+  studentId      String    @db.ObjectId
+  student        Student   @relation(fields: [studentId], references: [id])
+
+  status         String    @default("PENDING_REVIEW") // PENDING_REVIEW | APPROVED | REJECTED | CHANGES_REQUESTED
+  requestedName  String?   // name as the parent typed it (audit aid)
+  parentNote     String?   // message from the parent
+  reviewNote     String?   // admin's note on reject / changes requested
+  reviewedBy     String?   @db.ObjectId // admin user id
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([parentId])
+  @@index([studentId])
+  @@index([status])
 }
 
 // ========== TEACHER ==========
@@ -156,7 +187,14 @@ model Teacher {
   name     String
   phone    String?
   email    String  @unique
+  gender   String? // MALE | FEMALE | OTHER (collected at registration)
   isActive Boolean @default(true)
+  createdAt DateTime @default(now()) // backfilled at server start for pre-existing rows
+
+  // Self-service profile setup (filled by the teacher after registration)
+  teacherType     String? // SUBJECT_TEACHER | FORM_TEACHER | BOTH
+  briefSubjects   Json?   // { subjects: ["Mathematics"], classes: ["JSS 1 Gold"] }
+  registrationStatus String @default("APPROVED") // PENDING | APPROVED | REJECTED (self-registered teachers start PENDING)
 
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId

@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.timetableService = void 0;
+exports.timeSlotService = exports.isBreakSlot = exports.timetableService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const tenantContext_1 = require("../utils/tenantContext");
 exports.timetableService = {
@@ -15,10 +15,19 @@ exports.timetableService = {
             orderBy: [{ dayOfWeek: 'asc' }, { timeSlot: 'asc' }],
         }); // middleware adds schoolId
     },
-    getByTeacherId: async (teacherId) => {
+    getByTeacherId: async (teacherIdOrUserId) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
+        // The caller may pass either the Teacher profile id or the User id
+        // (e.g. from the JWT). Resolve to the actual Teacher profile id.
+        let teacherId = teacherIdOrUserId;
+        const teacher = await db_1.default.teacher.findFirst({
+            where: { schoolId: tenantId, OR: [{ id: teacherIdOrUserId }, { userId: teacherIdOrUserId }] },
+            select: { id: true },
+        });
+        if (teacher)
+            teacherId = teacher.id;
         const teacherSubjects = await db_1.default.subjectArm.findMany({
             where: { teacherId, schoolId: tenantId },
             select: { armId: true, subjectId: true },
@@ -151,5 +160,59 @@ exports.timetableService = {
         return db_1.default.timetableEntry.delete({
             where: { id, schoolId: tenantId },
         });
+    },
+};
+// ========== TIME SLOT LAYOUT ==========
+// Slots whose name marks them as a non-instructional break period.
+// Mirrors isBreakSlot() on the frontend so both sides agree.
+const BREAK_KEYWORDS = ['break', 'lunch', 'recess'];
+const isBreakSlot = (slot) => {
+    const s = (slot || '').trim().toLowerCase();
+    return BREAK_KEYWORDS.some(k => s.includes(k));
+};
+exports.isBreakSlot = isBreakSlot;
+exports.timeSlotService = {
+    // Get the ordered slot layout for an arm. Falls back to [] when the arm
+    // has never had a custom layout saved (frontend then uses its default).
+    getForArm: async (armId) => {
+        const arm = await db_1.default.arm.findUnique({
+            where: { id: armId },
+            select: { timeSlots: true },
+        });
+        return arm?.timeSlots ?? [];
+    },
+    /**
+     * Save the ordered slot layout for an arm and recompute the timetable:
+     * any existing timetable entries on slots that were removed, renamed away,
+     * or that are break slots are deleted — break slots are always off for
+     * classes and can never hold a subject.
+     */
+    setForArm: async (armId, slots) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        const cleaned = slots.map(s => s.trim()).filter(Boolean);
+        const lowered = cleaned.map(s => s.toLowerCase());
+        if (new Set(lowered).size !== cleaned.length) {
+            throw new Error('Duplicate time slot names are not allowed');
+        }
+        const validSlots = new Set(cleaned);
+        const breakSlots = cleaned.filter(exports.isBreakSlot);
+        // Entries that must go: break slots, renamed/removed slots, or any
+        // subject entry that somehow sits on a break slot.
+        const deleteWhere = {
+            armId,
+            schoolId: tenantId,
+            OR: [
+                { timeSlot: { nin: cleaned } }, // slot no longer exists
+                { timeSlot: { in: breakSlots } }, // break slots hold no classes
+                { subjectId: null }, // orphaned empty entries
+            ],
+        };
+        const result = await db_1.default.$transaction([
+            db_1.default.timetableEntry.deleteMany({ where: deleteWhere }),
+            db_1.default.arm.update({ where: { id: armId }, data: { timeSlots: cleaned } }),
+        ]);
+        return { timeSlots: cleaned, removedEntries: result[0].count };
     },
 };

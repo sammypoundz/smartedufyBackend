@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "postinstall": "prisma generate && npm run build",
     "seed": "ts-node prisma/seed.ts",
+    "test:parent": "ts-node prisma/testParent.ts",
     "seed:goldenlight": "ts-node prisma/newSchoolSeed.ts"
   },
   "engines": {

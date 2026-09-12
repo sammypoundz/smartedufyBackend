@@ -90,57 +90,61 @@ exports.staffService = {
         if (!tenantId)
             throw new Error('Tenant context missing');
         const { name, email, role, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
-        const user = await db_1.default.user.create({
-            data: {
-                name,
-                email,
-                password: hashedPassword,
-                role,
-                isActive: true,
-                schoolId: tenantId,
-            },
-        });
-        if (role === 'TEACHER') {
-            const teacher = await db_1.default.teacher.create({
+        // Create the user and any role-specific records atomically
+        const user = await db_1.default.$transaction(async (tx) => {
+            const createdUser = await tx.user.create({
                 data: {
-                    name: name || '',
+                    name,
                     email,
-                    userId: user.id,
+                    password: hashedPassword,
+                    role,
+                    isActive: true,
                     schoolId: tenantId,
                 },
             });
-            if (teacherType === 'class_teacher' && assignedClass) {
-                const arm = await db_1.default.arm.findFirst({
-                    where: { class: { name: assignedClass }, schoolId: tenantId },
+            if (role === 'TEACHER') {
+                const teacher = await tx.teacher.create({
+                    data: {
+                        name: name || '',
+                        email,
+                        userId: createdUser.id,
+                        schoolId: tenantId,
+                    },
                 });
-                if (arm) {
-                    await db_1.default.arm.update({
-                        where: { id: arm.id, schoolId: tenantId },
-                        data: { teacherId: teacher.id },
+                if (teacherType === 'class_teacher' && assignedClass) {
+                    const arm = await tx.arm.findFirst({
+                        where: { class: { name: assignedClass }, schoolId: tenantId },
                     });
-                }
-            }
-            if (teacherType === 'subject_teacher' && assignedSubjects?.length) {
-                for (const subj of assignedSubjects) {
-                    const subject = await db_1.default.subject.findFirst({
-                        where: { name: subj.subject, schoolId: tenantId },
-                    });
-                    const arm = await db_1.default.arm.findFirst({
-                        where: { class: { name: subj.class }, schoolId: tenantId },
-                    });
-                    if (subject && arm) {
-                        await db_1.default.subjectArm.create({
-                            data: {
-                                subjectId: subject.id,
-                                armId: arm.id,
-                                teacherId: teacher.id,
-                                schoolId: tenantId,
-                            },
+                    if (arm) {
+                        await tx.arm.update({
+                            where: { id: arm.id, schoolId: tenantId },
+                            data: { teacherId: teacher.id },
                         });
                     }
                 }
+                if (teacherType === 'subject_teacher' && assignedSubjects?.length) {
+                    for (const subj of assignedSubjects) {
+                        const subject = await tx.subject.findFirst({
+                            where: { name: subj.subject, schoolId: tenantId },
+                        });
+                        const arm = await tx.arm.findFirst({
+                            where: { class: { name: subj.class }, schoolId: tenantId },
+                        });
+                        if (subject && arm) {
+                            await tx.subjectArm.create({
+                                data: {
+                                    subjectId: subject.id,
+                                    armId: arm.id,
+                                    teacherId: teacher.id,
+                                    schoolId: tenantId,
+                                },
+                            });
+                        }
+                    }
+                }
             }
-        }
+            return createdUser;
+        });
         return (0, exports.buildStaffResponse)(user);
     },
     updateStaff: async (id, data) => {
@@ -256,18 +260,34 @@ exports.staffService = {
         });
         if (!user)
             throw new Error('Staff not found');
-        if (user.role === 'TEACHER') {
-            const teacher = await db_1.default.teacher.findUnique({
-                where: { userId: id, schoolId: tenantId },
-            });
-            if (teacher) {
-                await db_1.default.teacher.delete({
-                    where: { id: teacher.id, schoolId: tenantId },
+        // Delete all related records atomically so no orphaned rows remain
+        // (Payroll has onDelete: Cascade and cleans itself up)
+        await db_1.default.$transaction(async (tx) => {
+            if (user.role === 'TEACHER') {
+                const teacher = await tx.teacher.findUnique({
+                    where: { userId: id, schoolId: tenantId },
                 });
+                if (teacher) {
+                    // Release arms and subject-arm assignments
+                    await tx.arm.updateMany({
+                        where: { teacherId: teacher.id, schoolId: tenantId },
+                        data: { teacherId: null },
+                    });
+                    await tx.subjectArm.updateMany({
+                        where: { teacherId: teacher.id, schoolId: tenantId },
+                        data: { teacherId: null },
+                    });
+                    await tx.subjectTeacher.deleteMany({
+                        where: { teacherId: teacher.id, schoolId: tenantId },
+                    });
+                    await tx.teacher.delete({
+                        where: { id: teacher.id, schoolId: tenantId },
+                    });
+                }
             }
-        }
-        await db_1.default.user.delete({
-            where: { id, schoolId: tenantId },
+            await tx.user.delete({
+                where: { id, schoolId: tenantId },
+            });
         });
         return { message: 'Staff deleted successfully' };
     },

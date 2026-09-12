@@ -9,7 +9,10 @@ const gradingScalesSchema = zod_1.z.object({
         min: zod_1.z.number(),
         max: zod_1.z.number(),
     })),
+    groupId: zod_1.z.string().nullable().optional(),
 });
+const gradingScaleGroupSchema = zod_1.z.object({ name: zod_1.z.string().min(1) });
+const assignGradingScaleGroupSchema = zod_1.z.object({ groupId: zod_1.z.string().nullable() });
 const academicYearSchema = zod_1.z.object({
     name: zod_1.z.string(),
     terms: zod_1.z.array(zod_1.z.string()),
@@ -39,8 +42,8 @@ exports.academicController = {
     },
     saveGradingScales: async (req, res) => {
         try {
-            const { scales } = gradingScalesSchema.parse(req.body);
-            await academicService_1.academicService.saveGradingScales(scales);
+            const { scales, groupId } = gradingScalesSchema.parse(req.body);
+            await academicService_1.academicService.saveGradingScales(scales, groupId ?? null);
             res.json({ success: true });
         }
         catch (err) {
@@ -48,6 +51,70 @@ exports.academicController = {
                 return res.status(400).json({ error: err.errors });
             console.error(err);
             res.status(500).json({ error: 'Failed to save grading scales' });
+        }
+    },
+    // Grading scale groups
+    getGradingScaleGroups: async (req, res) => {
+        try {
+            const groups = await academicService_1.academicService.getGradingScaleGroups();
+            res.json(groups);
+        }
+        catch (err) {
+            console.error(err);
+            res.status(500).json({ error: 'Failed to fetch grading scale groups' });
+        }
+    },
+    createGradingScaleGroup: async (req, res) => {
+        try {
+            const { name } = gradingScaleGroupSchema.parse(req.body);
+            const group = await academicService_1.academicService.createGradingScaleGroup(name);
+            res.status(201).json(group);
+        }
+        catch (err) {
+            if (err.name === 'ZodError')
+                return res.status(400).json({ error: err.errors });
+            if (err.code === 'P2002')
+                return res.status(409).json({ error: 'A group with this name already exists' });
+            console.error(err);
+            res.status(500).json({ error: 'Failed to create grading scale group' });
+        }
+    },
+    updateGradingScaleGroup: async (req, res) => {
+        try {
+            const { name } = gradingScaleGroupSchema.parse(req.body);
+            const group = await academicService_1.academicService.updateGradingScaleGroup(String(req.params.id), name);
+            res.json(group);
+        }
+        catch (err) {
+            if (err.name === 'ZodError')
+                return res.status(400).json({ error: err.errors });
+            console.error(err);
+            res.status(500).json({ error: 'Failed to update grading scale group' });
+        }
+    },
+    deleteGradingScaleGroup: async (req, res) => {
+        try {
+            await academicService_1.academicService.deleteGradingScaleGroup(String(req.params.id));
+            res.json({ success: true });
+        }
+        catch (err) {
+            if (err.message?.includes('Cannot delete'))
+                return res.status(400).json({ error: err.message });
+            console.error(err);
+            res.status(500).json({ error: 'Failed to delete grading scale group' });
+        }
+    },
+    assignGradingScaleGroupToClass: async (req, res) => {
+        try {
+            const { groupId } = assignGradingScaleGroupSchema.parse(req.body);
+            const updated = await academicService_1.academicService.assignGradingScaleGroupToClass(String(req.params.classId), groupId);
+            res.json(updated);
+        }
+        catch (err) {
+            if (err.name === 'ZodError')
+                return res.status(400).json({ error: err.errors });
+            console.error(err);
+            res.status(500).json({ error: 'Failed to assign grading scale group to class' });
         }
     },
     // Academic years

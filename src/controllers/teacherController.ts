@@ -229,4 +229,69 @@ export const teacherController = {
       res.status(500).json({ error: err.message });
     }
   },
+
+  /**
+   * PATCH /api/teachers/me
+   * Self-service profile completion for the logged-in teacher.
+   * Lets a teacher fill in their own phone number (e.g. right after
+   * self-registration) without needing admin rights.
+   */
+  updateMe: async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      const teacher = await db.teacher.findUnique({ where: { userId } });
+      if (!teacher) return res.status(404).json({ error: 'Teacher profile not found' });
+
+      const schema = z.object({
+        phone: z.string().min(1).optional(),
+        name: z.string().min(1).optional(),
+        // Self-service profile-setup fields (e.g. right after registration):
+        teacherType: z.enum(['SUBJECT_TEACHER', 'FORM_TEACHER', 'BOTH']).optional(),
+        briefSubjects: z
+          .object({
+            subjects: z.array(z.string()).optional(),
+            classes: z.array(z.string()).optional(),
+            // Specific arms the teacher chose (form teacher) — arm ids.
+            armIds: z.array(z.string()).optional(),
+            // subject name -> arm ids it is offered to (subject teacher).
+            subjectArms: z
+              .array(
+                z.object({ subject: z.string().min(1), armId: z.string().min(1) }),
+              )
+              .optional(),
+          })
+          .optional(),
+      });
+      const data = schema.parse(req.body);
+
+      const updated = await db.teacher.update({
+        where: { id: teacher.id },
+        data: {
+          ...(data.phone !== undefined ? { phone: data.phone } : {}),
+          ...(data.name !== undefined ? { name: data.name } : {}),
+          ...(data.teacherType !== undefined ? { teacherType: data.teacherType } : {}),
+          ...(data.briefSubjects !== undefined ? { briefSubjects: data.briefSubjects } : {}),
+        },
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          teacherType: true,
+          briefSubjects: true,
+        },
+      });
+
+      // Keep the auth user's display name in sync if the teacher changed it
+      if (data.name !== undefined) {
+        await db.user.update({ where: { id: userId }, data: { name: data.name } });
+      }
+
+      res.json({ teacher: updated });
+    } catch (err: any) {
+      console.error('Update teacher self-profile error:', err);
+      res.status(400).json({ error: err.message || 'Failed to update profile' });
+    }
+  },
 };

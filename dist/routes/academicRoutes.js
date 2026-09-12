@@ -9,6 +9,12 @@ const router = (0, express_1.Router)();
 router.use(auth_1.authMiddleware);
 router.get('/grading-scales', academicController_1.academicController.getGradingScales);
 router.post('/grading-scales/bulk', (0, roleGuard_1.roleGuard)(['ADMIN']), academicController_1.academicController.saveGradingScales);
+// Grading scale groups
+router.get('/grading-scale-groups', academicController_1.academicController.getGradingScaleGroups);
+router.post('/grading-scale-groups', (0, roleGuard_1.roleGuard)(['ADMIN']), academicController_1.academicController.createGradingScaleGroup);
+router.put('/grading-scale-groups/:id', (0, roleGuard_1.roleGuard)(['ADMIN']), academicController_1.academicController.updateGradingScaleGroup);
+router.delete('/grading-scale-groups/:id', (0, roleGuard_1.roleGuard)(['ADMIN']), academicController_1.academicController.deleteGradingScaleGroup);
+router.put('/classes/:classId/grading-scale-group', (0, roleGuard_1.roleGuard)(['ADMIN']), academicController_1.academicController.assignGradingScaleGroupToClass);
 router.get('/academic-years', academicController_1.academicController.getAcademicYears);
 router.post('/academic-years', (0, roleGuard_1.roleGuard)(['ADMIN']), academicController_1.academicController.createAcademicYear);
 router.get('/academic-session/current', academicController_1.academicController.getCurrentSession);

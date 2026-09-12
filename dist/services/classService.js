@@ -12,6 +12,7 @@ exports.classService = {
      */
     getAll: () => db_1.default.class.findMany({
         include: {
+            gradingScaleGroup: { select: { id: true, name: true } },
             arms: {
                 include: {
                     teacher: {

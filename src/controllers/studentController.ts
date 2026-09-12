@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { studentService } from '../services/studentService';
 import { assignParentSchema } from '../validations/studentValidation';
 import { getStringParam } from '../utils/paramUtils';
+import { idGeneratorService } from '../services/idGeneratorService';
 import { z } from 'zod';
 import prisma from '../config/db';
 
@@ -12,6 +13,9 @@ const createStudentSchema = z.object({
   admissionNumber: z.string().optional(),
   classId: z.string().optional(),
   armId: z.string().optional(),
+  // When true, the admission number is generated from the admin's
+  // ID Generator config (Settings → ID Generator) for the STUDENT role.
+  useDefaultId: z.boolean().optional(),
 });
 
 // ✅ parentId accepts null (for unassigning)
@@ -144,7 +148,16 @@ export const studentController = {
   create: async (req: Request, res: Response) => {
     try {
       const data = createStudentSchema.parse(req.body);
-      const student = await studentService.create(data);
+      /*
+       * Auto-ID path: when useDefaultId is set (and no manual admission
+       * number was supplied), atomically claim the next admission number
+       * from the admin's ID Generator config for the STUDENT role.
+       */
+      let admissionNumber = data.admissionNumber;
+      if (data.useDefaultId && !admissionNumber?.trim()) {
+        admissionNumber = await idGeneratorService.claimNextId('STUDENT');
+      }
+      const student = await studentService.create({ ...data, admissionNumber });
       res.status(201).json(student);
     } catch (err: any) {
       console.error('Create student error:', err);
@@ -198,7 +211,15 @@ export const studentController = {
       res.json({ message: 'Student deleted' });
     } catch (err: any) {
       console.error('Delete student error:', err);
-      res.status(500).json({ error: 'Failed to delete student' });
+      // Surface the real reason (e.g. still referenced by another record)
+      // instead of the generic message so the admin knows what to do.
+      const detail =
+        err?.code === 'P2003'
+          ? 'This student is still referenced by other records (e.g. fees, results or a parent link). Remove those first.'
+          : typeof err?.message === 'string' && err.message !== 'Tenant context missing'
+          ? err.message
+          : 'Failed to delete student';
+      res.status(500).json({ error: detail });
     }
   },
 

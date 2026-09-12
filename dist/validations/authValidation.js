@@ -14,6 +14,9 @@ exports.registerSchema = zod_1.z.object({
     classId: zod_1.z.string().optional(),
     armId: zod_1.z.string().optional(),
     phone: zod_1.z.string().optional(),
+    // Auto ID (default) or manual custom ID
+    idMode: zod_1.z.enum(['AUTO', 'MANUAL']).default('AUTO'),
+    customId: zod_1.z.string().max(60).optional(),
 });
 exports.loginSchema = zod_1.z.object({
     email: zod_1.z.string().email(),

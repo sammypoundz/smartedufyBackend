@@ -259,6 +259,8 @@ exports.teacherService = {
     },
     /**
      * Delete a teacher.
+     * Cleans up all related records (arm assignments, subject-arms, subject-teacher
+     * join rows and the linked User account) so there are no orphaned rows.
      * @param id - Teacher ID
      * @returns The deleted teacher.
      */
@@ -267,8 +269,34 @@ exports.teacherService = {
         if (!tenantId)
             throw new Error('Tenant context missing');
         console.log('🔍 Deleting teacher:', id);
-        return db_1.default.teacher.delete({
-            where: { id, schoolId: tenantId },
+        return db_1.default.$transaction(async (tx) => {
+            const teacher = await tx.teacher.findUnique({
+                where: { id, schoolId: tenantId },
+            });
+            if (!teacher)
+                throw new Error('Teacher not found');
+            // Release arms previously assigned to this teacher
+            await tx.arm.updateMany({
+                where: { teacherId: teacher.id, schoolId: tenantId },
+                data: { teacherId: null },
+            });
+            // Remove subject-arm teaching assignments
+            await tx.subjectArm.updateMany({
+                where: { teacherId: teacher.id, schoolId: tenantId },
+                data: { teacherId: null },
+            });
+            // Remove subject-teacher join rows
+            await tx.subjectTeacher.deleteMany({
+                where: { teacherId: teacher.id, schoolId: tenantId },
+            });
+            const deleted = await tx.teacher.delete({
+                where: { id, schoolId: tenantId },
+            });
+            // Remove the linked user account
+            await tx.user.delete({
+                where: { id: teacher.userId, schoolId: tenantId },
+            });
+            return deleted;
         });
     },
     /**

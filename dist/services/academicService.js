@@ -7,8 +7,36 @@ exports.academicService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const tenantContext_1 = require("../utils/tenantContext");
 // ---------- Private helpers ----------
-async function computeGrade(score) {
-    const scales = await db_1.default.gradingScale.findMany({ orderBy: { minScore: 'desc' } });
+/**
+ * Compute a grade for a score. If an armId/classId context is provided, the
+ * grading scale group assigned to that class is used; otherwise the school-wide
+ * scales (grades with no group) are used.
+ */
+async function computeGrade(score, classId) {
+    let scales;
+    if (classId) {
+        const cls = await db_1.default.class.findUnique({
+            where: { id: classId },
+            select: { gradingScaleGroupId: true },
+        });
+        if (cls?.gradingScaleGroupId) {
+            scales = await db_1.default.gradingScale.findMany({
+                where: { groupId: cls.gradingScaleGroupId },
+                orderBy: { minScore: 'desc' },
+            });
+        }
+    }
+    if (!scales) {
+        // Fallback: school-wide scale (grades not attached to any group)
+        scales = await db_1.default.gradingScale.findMany({
+            where: { groupId: null },
+            orderBy: { minScore: 'desc' },
+        });
+        // Legacy compat: if no ungrouped grades exist, fall back to all scales
+        if (scales.length === 0) {
+            scales = await db_1.default.gradingScale.findMany({ orderBy: { minScore: 'desc' } });
+        }
+    }
     for (const scale of scales) {
         if (score >= scale.minScore && score <= scale.maxScore) {
             return scale.grade;
@@ -40,25 +68,80 @@ async function getOrCreateCbtSubject() {
 // ---------- Service ----------
 exports.academicService = {
     // --- Grading scales ---
-    getGradingScales: () => db_1.default.gradingScale.findMany({ orderBy: { minScore: 'desc' } }), // middleware adds schoolId
-    saveGradingScales: async (scales) => {
+    // Only the school-wide (ungrouped) scales; group-specific grades are served
+    // via /grading-scale-groups and used per-class.
+    getGradingScales: () => db_1.default.gradingScale.findMany({
+        where: { groupId: null },
+        orderBy: { minScore: 'desc' },
+    }), // middleware adds schoolId
+    saveGradingScales: async (scales, groupId) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        await db_1.default.gradingScale.deleteMany({
-            where: { schoolId: tenantId },
-        });
+        const where = groupId ? { schoolId: tenantId, groupId } : { schoolId: tenantId, groupId: null };
+        await db_1.default.gradingScale.deleteMany({ where });
         for (const scale of scales) {
             await db_1.default.gradingScale.create({
                 data: {
                     grade: scale.grade,
                     minScore: scale.min,
                     maxScore: scale.max,
+                    groupId: groupId || null,
                     schoolId: tenantId,
                 },
             });
         }
         return { count: scales.length };
+    },
+    // --- Grading scale groups ---
+    getGradingScaleGroups: () => db_1.default.gradingScaleGroup.findMany({
+        include: { grades: { orderBy: { minScore: 'desc' } } },
+        orderBy: { createdAt: 'asc' },
+    }),
+    createGradingScaleGroup: async (name) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        return db_1.default.gradingScaleGroup.create({
+            data: { name, schoolId: tenantId },
+            include: { grades: true },
+        });
+    },
+    updateGradingScaleGroup: async (id, name) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        return db_1.default.gradingScaleGroup.update({
+            where: { id, schoolId: tenantId },
+            data: { name },
+            include: { grades: { orderBy: { minScore: 'desc' } } },
+        });
+    },
+    deleteGradingScaleGroup: async (id) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        const group = await db_1.default.gradingScaleGroup.findFirst({
+            where: { id, schoolId: tenantId },
+            include: { _count: { select: { classes: true } } },
+        });
+        if (!group)
+            throw new Error('Grading scale group not found');
+        if (group._count.classes > 0) {
+            throw new Error(`Cannot delete: ${group._count.classes} class(es) still use this grading scale group`);
+        }
+        await db_1.default.gradingScale.deleteMany({ where: { groupId: id, schoolId: tenantId } });
+        await db_1.default.gradingScaleGroup.delete({ where: { id, schoolId: tenantId } });
+        return { success: true };
+    },
+    assignGradingScaleGroupToClass: async (classId, groupId) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        return db_1.default.class.update({
+            where: { id: classId, schoolId: tenantId },
+            data: { gradingScaleGroupId: groupId },
+        });
     },
     // --- Academic Years & Terms ---
     getAllAcademicYears: () => db_1.default.academicYear.findMany({
@@ -134,7 +217,7 @@ exports.academicService = {
         // 1. Get the test (ensure it belongs to the tenant)
         const test = await db_1.default.test.findUnique({
             where: { id: data.testId, schoolId: tenantId },
-            select: { armId: true, name: true },
+            select: { armId: true, name: true, arm: { select: { classId: true } } },
         });
         if (!test)
             throw new Error('Test not found');
@@ -150,7 +233,7 @@ exports.academicService = {
         // 4. Prepare result records
         const resultsData = await Promise.all(attempts.map(async (attempt) => {
             const score = attempt.score;
-            const grade = await computeGrade(score);
+            const grade = await computeGrade(score, test.arm?.classId);
             return {
                 studentId: attempt.studentId,
                 subjectId,

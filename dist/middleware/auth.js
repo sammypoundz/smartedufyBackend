@@ -5,7 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.privilegeGuard = exports.roleGuard = exports.authMiddleware = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const authMiddleware = (req, res, next) => {
+const privilegeService_1 = require("../services/privilegeService");
+const authMiddleware = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -13,6 +14,20 @@ const authMiddleware = (req, res, next) => {
     try {
         const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET);
         req.user = decoded;
+        // Re-resolve privileges + roles fresh from the DB on every request so that
+        // changes made on the Roles & Privileges page apply to ALL users holding
+        // that role immediately — without requiring a re-login. The token claims
+        // act as a fallback if the DB lookup fails.
+        try {
+            const effective = await (0, privilegeService_1.getUserEffectivePrivileges)(decoded.id);
+            if (effective) {
+                req.user.roles = effective.roles;
+                req.user.privileges = effective.privileges;
+            }
+        }
+        catch {
+            // keep token claims on failure — fail open to last-known privileges
+        }
         next();
     }
     catch (err) {

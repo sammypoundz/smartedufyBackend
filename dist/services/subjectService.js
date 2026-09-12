@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.subjectService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const tenantContext_1 = require("../utils/tenantContext");
+const syncService_1 = require("./syncService");
 function getGradeLetterFromScales(score, scales) {
     for (const scale of scales) {
         if (score >= scale.minScore && score <= scale.maxScore) {
@@ -114,44 +115,87 @@ exports.subjectService = {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.subjectArm.create({
-            data: {
-                subjectId,
-                armId,
-                teacherId,
-                schoolId: tenantId,
-            },
+        await syncService_1.syncService.validateSubjectArmLink(tenantId, subjectId, armId, teacherId);
+        // Idempotent: never duplicate a subject-arm link
+        const existing = await db_1.default.subjectArm.findFirst({
+            where: { schoolId: tenantId, subjectId, armId },
         });
+        let link;
+        if (existing) {
+            link = await db_1.default.subjectArm.update({
+                where: { id: existing.id, schoolId: tenantId },
+                data: { teacherId: teacherId ?? existing.teacherId },
+            });
+        }
+        else {
+            link = await db_1.default.subjectArm.create({
+                data: { subjectId, armId, teacherId, schoolId: tenantId },
+            });
+        }
+        if (teacherId) {
+            await syncService_1.syncService.ensureSubjectTeacher(db_1.default, tenantId, subjectId, teacherId);
+        }
+        await syncService_1.syncService.syncStudentSubjectsForArm(tenantId, armId);
+        return link;
     },
     updateArmSubject: async (id, teacherId) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.subjectArm.update({
+        if (teacherId) {
+            const teacher = await db_1.default.teacher.findFirst({ where: { id: teacherId, schoolId: tenantId } });
+            if (!teacher)
+                throw new Error('Teacher not found in this school');
+        }
+        const previous = await db_1.default.subjectArm.findFirst({ where: { id, schoolId: tenantId } });
+        const updated = await db_1.default.subjectArm.update({
             where: { id, schoolId: tenantId },
             data: { teacherId },
             include: { subject: true, teacher: true },
         });
+        if (teacherId) {
+            await syncService_1.syncService.ensureSubjectTeacher(db_1.default, tenantId, updated.subjectId, teacherId);
+        }
+        if (previous?.teacherId && previous.teacherId !== teacherId) {
+            await syncService_1.syncService.pruneSubjectTeachers(db_1.default, tenantId, previous.subjectId, previous.teacherId);
+        }
+        return updated;
     },
     removeFromArm: async (armId, subjectId) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.subjectArm.deleteMany({
-            where: {
-                armId,
-                subjectId,
-                schoolId: tenantId,
-            },
+        const relations = await db_1.default.subjectArm.findMany({
+            where: { armId, subjectId, schoolId: tenantId },
         });
+        const removed = await db_1.default.subjectArm.deleteMany({
+            where: { armId, subjectId, schoolId: tenantId },
+        });
+        for (const r of relations) {
+            if (r.teacherId) {
+                await syncService_1.syncService.pruneSubjectTeachers(db_1.default, tenantId, subjectId, r.teacherId);
+            }
+        }
+        await db_1.default.studentSubject.deleteMany({
+            where: { schoolId: tenantId, subjectId, student: { armId } },
+        });
+        return removed;
     },
     deleteSubjectArm: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.subjectArm.delete({
-            where: { id, schoolId: tenantId },
-        });
+        const relation = await db_1.default.subjectArm.findFirst({ where: { id, schoolId: tenantId } });
+        const removed = await db_1.default.subjectArm.delete({ where: { id, schoolId: tenantId } });
+        if (relation?.teacherId) {
+            await syncService_1.syncService.pruneSubjectTeachers(db_1.default, tenantId, relation.subjectId, relation.teacherId);
+        }
+        if (relation) {
+            await db_1.default.studentSubject.deleteMany({
+                where: { schoolId: tenantId, subjectId: relation.subjectId, student: { armId: relation.armId } },
+            });
+        }
+        return removed;
     },
     // ---------- Curriculum (topics) – full CRUD ----------
     getCurriculum: async (subjectId, armId) => {

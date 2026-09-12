@@ -8,8 +8,14 @@ const roleGuard_1 = require("../middleware/roleGuard");
 const router = (0, express_1.Router)();
 // ==================== PUBLIC CLASS ROUTES (no auth) ====================
 // Students need to see classes and arms before logging in
-router.get('/', classController_1.classController.getAll); // ✅ public
-router.get('/:classId/arms', armController_1.armController.getByClassId); // ✅ public
+router.get('/', auth_1.authMiddleware, classController_1.classController.getAll);
+router.get('/:classId/arms', armController_1.armController.getByClassId);
+/**
+ * GET /api/classes/teacher/classes
+ * Returns only the classes assigned to the authenticated teacher.
+ * MUST be registered before '/:id' so 'teacher' is not treated as an id.
+ */
+router.get('/teacher/classes', auth_1.authMiddleware, classController_1.classController.getMyClasses);
 // ==================== PROTECTED CLASS ROUTES ====================
 /**
  * GET /api/classes/:id

@@ -14,6 +14,7 @@ const TENANT_MODELS = [
   'Message', 'Expense', 'Budget', 'Payroll',
   'Test', 'Question', 'TestAttempt',
   'StudentPromotionHistory', 'AcademicYear', 'Term',
+  'ParentStudentLink',
 ];
 
 const prisma = new PrismaClient();

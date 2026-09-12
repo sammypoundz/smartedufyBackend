@@ -68,6 +68,41 @@ exports.timetableController = {
             res.status(500).json({ error: 'Failed to update timetable entry' });
         }
     },
+    // Get the ordered time slot layout for an arm
+    getTimeSlots: async (req, res) => {
+        const armId = (0, paramUtils_1.getStringParam)(req.params.armId);
+        if (!armId)
+            return res.status(400).json({ error: 'Invalid armId' });
+        try {
+            res.json({ timeSlots: await timetableService_1.timeSlotService.getForArm(armId) });
+        }
+        catch (err) {
+            console.error('Get time slots error:', err);
+            res.status(500).json({ error: 'Failed to fetch time slots' });
+        }
+    },
+    // Save the ordered time slot layout for an arm (admin only).
+    // Recomputes the timetable: removed slots and break slots can never hold classes.
+    updateTimeSlots: async (req, res) => {
+        const armId = (0, paramUtils_1.getStringParam)(req.params.armId);
+        if (!armId)
+            return res.status(400).json({ error: 'Invalid armId' });
+        try {
+            const { timeSlots } = timetableValidation_1.timeSlotsSchema.parse(req.body);
+            const result = await timetableService_1.timeSlotService.setForArm(armId, timeSlots);
+            res.json(result);
+        }
+        catch (err) {
+            console.error('Update time slots error:', err);
+            if (err.name === 'ZodError') {
+                return res.status(400).json({ error: err.errors });
+            }
+            if (err.message && err.message.includes('Duplicate')) {
+                return res.status(400).json({ error: err.message });
+            }
+            res.status(500).json({ error: 'Failed to update time slots' });
+        }
+    },
     // Delete a single timetable entry
     delete: async (req, res) => {
         const id = (0, paramUtils_1.getStringParam)(req.params.id);
@@ -95,9 +130,12 @@ exports.timetableController = {
                 id: entry.id,
                 dayOfWeek: entry.dayOfWeek,
                 timeSlot: entry.timeSlot,
-                subject: { name: entry.subject?.name || 'Unknown' },
+                startTime: entry.timeSlot,
+                subject: { id: entry.subjectId, name: entry.subject?.name || 'Unknown' },
                 arm: {
+                    id: entry.armId,
                     letter: entry.arm?.letter || '',
+                    alias: entry.arm?.alias || entry.arm?.letter || '',
                     class: entry.arm?.class ? { name: entry.arm.class.name } : undefined,
                 },
             }));

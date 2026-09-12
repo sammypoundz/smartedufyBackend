@@ -8,6 +8,8 @@ const router = (0, express_1.Router)();
 // ---------- Specific routes (no :id param) ----------
 // Get all arms for a specific class
 router.get('/class/:classId', auth_1.authMiddleware, armController_1.armController.getByClassId);
+// Get the authenticated teacher's class assignments
+router.get('/my-assignments', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['TEACHER']), armController_1.armController.getMyAssignments);
 // Get all arms (with class relation) – used in teacher management
 router.get('/', auth_1.authMiddleware, armController_1.armController.getAll);
 // Direct subject‑arm deletion (used to remove a subject from a teacher)

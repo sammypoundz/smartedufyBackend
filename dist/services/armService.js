@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.armService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const tenantContext_1 = require("../utils/tenantContext");
+const syncService_1 = require("./syncService");
 exports.armService = {
     // Get all arms for a specific class, including teacher, students (with parent), subjects, and skills
     getByClassId: (classId) => db_1.default.arm.findMany({
@@ -95,7 +96,20 @@ exports.armService = {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.subjectArm.create({
+        // Integrity: validate all referenced entities belong to this school
+        await syncService_1.syncService.validateSubjectArmLink(tenantId, subjectId, armId, teacherId);
+        // Idempotent link: never create duplicates
+        const existing = await db_1.default.subjectArm.findFirst({
+            where: { armId, subjectId, schoolId: tenantId },
+        });
+        if (existing) {
+            return db_1.default.subjectArm.update({
+                where: { id: existing.id, schoolId: tenantId },
+                data: { teacherId: teacherId ?? existing.teacherId },
+                include: { subject: true, teacher: true },
+            });
+        }
+        const link = await db_1.default.subjectArm.create({
             data: {
                 armId,
                 subjectId,
@@ -104,6 +118,13 @@ exports.armService = {
             },
             include: { subject: true, teacher: true },
         });
+        // Keep SubjectTeacher join table in sync
+        if (teacherId) {
+            await syncService_1.syncService.ensureSubjectTeacher(db_1.default, tenantId, subjectId, teacherId);
+        }
+        // Enroll students of this arm into the newly offered subject
+        await syncService_1.syncService.syncStudentSubjectsForArm(tenantId, armId);
+        return link;
     },
     // Add a skill to an arm
     addSkillToArm: async (armId, skillId) => {
@@ -152,11 +173,24 @@ exports.armService = {
         });
         if (!relation)
             return null;
-        return db_1.default.subjectArm.update({
+        if (teacherId) {
+            const teacher = await db_1.default.teacher.findFirst({ where: { id: teacherId, schoolId: tenantId } });
+            if (!teacher)
+                throw new Error('Teacher not found in this school');
+        }
+        const updated = await db_1.default.subjectArm.update({
             where: { id: relation.id, schoolId: tenantId },
             data: { teacherId: teacherId || null },
             include: { subject: true, teacher: true },
         });
+        // Sync SubjectTeacher join table both ways (add new, prune old)
+        if (teacherId) {
+            await syncService_1.syncService.ensureSubjectTeacher(db_1.default, tenantId, subjectId, teacherId);
+        }
+        if (relation.teacherId && relation.teacherId !== teacherId) {
+            await syncService_1.syncService.pruneSubjectTeachers(db_1.default, tenantId, subjectId, relation.teacherId);
+        }
+        return updated;
     },
     // Remove a subject from an arm (by armId and subjectId)
     removeArmSubject: async (armId, subjectId) => {
@@ -168,18 +202,37 @@ exports.armService = {
         });
         if (!relation)
             return null;
-        return db_1.default.subjectArm.delete({
+        const removed = await db_1.default.subjectArm.delete({
             where: { id: relation.id, schoolId: tenantId },
         });
+        // Prune now-orphaned SubjectTeacher link
+        if (relation.teacherId) {
+            await syncService_1.syncService.pruneSubjectTeachers(db_1.default, tenantId, subjectId, relation.teacherId);
+        }
+        // Un-enroll students of this arm from the removed subject
+        await db_1.default.studentSubject.deleteMany({
+            where: { schoolId: tenantId, subjectId, student: { armId } },
+        });
+        return removed;
     },
     // Delete a subject-arm relation directly by its ID (used to remove a subject from a teacher)
     deleteSubjectArm: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.subjectArm.delete({
+        const relation = await db_1.default.subjectArm.findFirst({
             where: { id, schoolId: tenantId },
         });
+        if (!relation)
+            throw new Error('Subject-arm relation not found');
+        const removed = await db_1.default.subjectArm.delete({ where: { id, schoolId: tenantId } });
+        if (relation.teacherId) {
+            await syncService_1.syncService.pruneSubjectTeachers(db_1.default, tenantId, relation.subjectId, relation.teacherId);
+        }
+        await db_1.default.studentSubject.deleteMany({
+            where: { schoolId: tenantId, subjectId: relation.subjectId, student: { armId: relation.armId } },
+        });
+        return removed;
     },
     // ---------- Methods for student management (results page) ----------
     // Get all students in an arm (basic info: id, name, admissionNumber)

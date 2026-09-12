@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.idParamSchema = exports.updateBackupSettingsSchema = exports.updateSecuritySettingsSchema = exports.updateNotificationSettingsSchema = exports.updateBankDetailsSchema = exports.updateTemplateSchema = exports.createTemplateSchema = exports.updatePromotionRuleSchema = exports.createPromotionRuleSchema = exports.updateAcademicSettingsSchema = exports.updateGeneralSettingsSchema = void 0;
+exports.idParamSchema = exports.idGeneratorConfigSchema = exports.updateBackupSettingsSchema = exports.updateSecuritySettingsSchema = exports.updateNotificationSettingsSchema = exports.updateBankDetailsSchema = exports.updateTemplateSchema = exports.createTemplateSchema = exports.updatePromotionRuleSchema = exports.createPromotionRuleSchema = exports.updateAcademicSettingsSchema = exports.updateGeneralSettingsSchema = void 0;
 const zod_1 = require("zod");
 // ----- Global Settings -----
 exports.updateGeneralSettingsSchema = zod_1.z.object({
@@ -47,6 +47,13 @@ exports.updateSecuritySettingsSchema = zod_1.z.object({
 // ----- Backup Settings -----
 exports.updateBackupSettingsSchema = zod_1.z.object({
     autoBackup: zod_1.z.boolean().optional(),
+});
+// ----- ID Generator -----
+exports.idGeneratorConfigSchema = zod_1.z.object({
+    role: zod_1.z.string().min(1).max(50),
+    format: zod_1.z.string().min(1).max(60),
+    counter: zod_1.z.number().int().min(0).optional(),
+    resetCounter: zod_1.z.boolean().optional(),
 });
 // ----- Route Parameter Validation (optional but useful) -----
 exports.idParamSchema = zod_1.z.object({

@@ -10,6 +10,20 @@ const paramUtils_1 = require("../utils/paramUtils");
 const db_1 = __importDefault(require("../config/db"));
 exports.questionController = {
     /**
+     * GET /questions/bank
+     * Question bank — all questions in the school with test + subject info.
+     */
+    getBank: async (req, res) => {
+        try {
+            const questions = await questionService_1.questionService.getAllForSchool();
+            res.json(questions);
+        }
+        catch (err) {
+            console.error(err);
+            res.status(500).json({ error: 'Failed to fetch question bank' });
+        }
+    },
+    /**
      * GET /questions/test/:testId
      * Returns all questions for a given test, ordered by creation date.
      * Includes subject relation for frontend grouping.

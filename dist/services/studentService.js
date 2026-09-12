@@ -7,6 +7,7 @@ exports.studentService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const tenantContext_1 = require("../utils/tenantContext");
+const syncService_1 = require("./syncService");
 exports.studentService = {
     // ---------- Existing methods ----------
     getAll: async (armId) => {
@@ -15,7 +16,7 @@ exports.studentService = {
             where.armId = armId;
         return db_1.default.student.findMany({
             where,
-            include: { parent: true, class: true, arm: true, user: { select: { email: true } } },
+            include: { parent: true, class: true, arm: { include: { class: true } }, user: { select: { email: true } } },
             orderBy: { name: 'asc' },
         }); // middleware adds schoolId
     },
@@ -70,16 +71,31 @@ exports.studentService = {
         const email = `${data.name.toLowerCase().replace(/\s/g, '.')}@student.smartedufy.com`;
         const tempPassword = Math.random().toString(36).slice(-8);
         const hashedPassword = await bcryptjs_1.default.hash(tempPassword, 10);
-        const user = await db_1.default.user.create({
-            data: {
-                name: data.name,
-                email,
-                password: hashedPassword,
-                role: 'STUDENT',
-                isActive: true,
-                schoolId: tenantId,
-            },
-        });
+        // Reuse an existing account for this email if it has no student profile yet
+        // (e.g. orphaned accounts left behind by a previous upload/cleanup). Otherwise
+        // the unique email constraint would make every re-upload fail silently.
+        let user = await db_1.default.user.findUnique({ where: { email } });
+        if (user) {
+            const linkedStudent = await db_1.default.student.findUnique({ where: { userId: user.id } });
+            if (linkedStudent) {
+                throw new Error(`Student "${data.name}" already exists (login: ${email}). If this is a re-upload, use a different name or remove the duplicate.`);
+            }
+            if (user.schoolId !== tenantId) {
+                throw new Error(`A user with email ${email} already exists in another school.`);
+            }
+        }
+        else {
+            user = await db_1.default.user.create({
+                data: {
+                    name: data.name,
+                    email,
+                    password: hashedPassword,
+                    role: 'STUDENT',
+                    isActive: true,
+                    schoolId: tenantId,
+                },
+            });
+        }
         return db_1.default.student.create({
             data: {
                 name: data.name,
@@ -168,11 +184,16 @@ exports.studentService = {
             const newParent = await exports.studentService.createParentWithUser(data.newParent);
             updateData.parentId = newParent.id;
         }
-        return db_1.default.student.update({
+        const updatedStudent = await db_1.default.student.update({
             where: { id, schoolId: tenantId },
             data: updateData,
             include: { parent: true, class: true, arm: true },
         });
+        // If the student's arm changed, re-sync subject enrolments to the new arm
+        if (data.armId !== undefined) {
+            await syncService_1.syncService.syncStudentSubjectsForStudent(tenantId, updatedStudent.id);
+        }
+        return updatedStudent;
     },
     assignParent: async (studentId, parentId) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
@@ -211,9 +232,43 @@ exports.studentService = {
         await db_1.default.studentSubject.deleteMany({
             where: { studentId: id, schoolId: tenantId },
         });
-        return db_1.default.student.delete({
+        const student = await db_1.default.student.delete({
             where: { id, schoolId: tenantId },
         });
+        // Remove the linked login account so the email can be reused on re-upload
+        if (student.userId) {
+            await db_1.default.user.deleteMany({ where: { id: student.userId, role: 'STUDENT' } });
+        }
+        return student;
+    },
+    // Bulk delete students (and their related records + login accounts) scoped to the tenant
+    deleteMany: async (ids) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        if (!ids || ids.length === 0)
+            throw new Error('No students selected');
+        const students = await db_1.default.student.findMany({
+            where: { id: { in: ids }, schoolId: tenantId },
+            select: { id: true, userId: true },
+        });
+        const studentIds = students.map((s) => s.id);
+        const userIds = students.map((s) => s.userId).filter(Boolean);
+        await db_1.default.studentSubject.deleteMany({ where: { studentId: { in: studentIds }, schoolId: tenantId } });
+        await db_1.default.attendance.deleteMany({ where: { studentId: { in: studentIds } } });
+        await db_1.default.studentPromotionHistory.deleteMany({ where: { studentId: { in: studentIds } } });
+        await db_1.default.result.deleteMany({ where: { studentId: { in: studentIds } } });
+        await db_1.default.feePayment.deleteMany({ where: { studentId: { in: studentIds } } });
+        await db_1.default.studentFee.deleteMany({ where: { studentId: { in: studentIds } } });
+        await db_1.default.testAttempt.deleteMany({ where: { studentId: { in: studentIds } } });
+        await db_1.default.student.deleteMany({
+            where: { id: { in: studentIds }, schoolId: tenantId },
+        });
+        // Remove linked login accounts so emails can be reused on re-upload
+        if (userIds.length > 0) {
+            await db_1.default.user.deleteMany({ where: { id: { in: userIds }, role: 'STUDENT' } });
+        }
+        return { deleted: studentIds.length };
     },
     // ---------- Additional methods ----------
     getAllParents: () => db_1.default.parent.findMany({
@@ -234,6 +289,11 @@ exports.studentService = {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
+        // Integrity: only allow subjects that exist in this school
+        const schoolSubjectIds = new Set((await db_1.default.subject.findMany({ where: { schoolId: tenantId }, select: { id: true } })).map((s) => s.id));
+        const invalid = subjectIds.filter((sid) => !schoolSubjectIds.has(sid));
+        if (invalid.length)
+            throw new Error('Some subjects do not belong to this school');
         await db_1.default.studentSubject.deleteMany({
             where: { studentId, schoolId: tenantId },
         });
@@ -264,7 +324,7 @@ exports.studentService = {
     getStudentResults: async (studentId) => {
         const results = await db_1.default.result.findMany({
             where: { studentId },
-            include: { subject: true },
+            include: { subject: true, arm: { include: { class: true } }, academicYear: true },
             orderBy: [{ term: 'desc' }, { subject: { name: 'asc' } }],
         }); // middleware adds schoolId
         return results.map(result => ({
@@ -272,6 +332,124 @@ exports.studentService = {
             score: result.score,
             grade: result.grade || '',
             term: result.term,
+            arm: result.arm ? `${result.arm.class?.name ?? ''} ${result.arm.letter}`.trim() : '',
+            academicYear: result.academicYear?.name || '',
+            ca: result.ca,
+            exam: result.exam,
+            total: result.total,
         }));
+    },
+    // Full class/grade journey of the student, oldest first
+    getStudentHistory: async (studentId) => {
+        const [promotions, student] = await Promise.all([
+            db_1.default.studentPromotionHistory.findMany({
+                where: { studentId },
+                include: {
+                    fromArm: { include: { class: true } },
+                    toArm: { include: { class: true } },
+                    fromClass: true,
+                    toClass: true,
+                    academicYear: true,
+                    term: true,
+                },
+                orderBy: { promotedAt: 'asc' },
+            }),
+            db_1.default.student.findUnique({
+                where: { id: studentId },
+                select: {
+                    id: true, name: true, admissionNumber: true, createdAt: true,
+                    arm: { include: { class: true } },
+                },
+            }),
+        ]);
+        if (!student)
+            throw new Error('Student not found');
+        // Build the chronological list of class placements from the promotion trail
+        const placements = [];
+        if (promotions.length > 0) {
+            const first = promotions[0];
+            placements.push({
+                className: first.fromClass?.name || first.fromArm?.class?.name || '',
+                arm: first.fromArm?.letter || '',
+                academicYear: first.academicYear?.name || '',
+                term: first.term?.name || '',
+                promotedAt: first.promotedAt,
+            });
+            for (const p of promotions) {
+                placements.push({
+                    className: p.toClass?.name || p.toArm?.class?.name || '',
+                    arm: p.toArm?.letter || '',
+                    academicYear: p.academicYear?.name || '',
+                    term: p.term?.name || '',
+                    promotedAt: p.promotedAt,
+                });
+            }
+        }
+        else if (student.arm) {
+            placements.push({
+                className: student.arm.class?.name || '',
+                arm: student.arm.letter,
+                academicYear: '',
+                term: '',
+                promotedAt: student.createdAt,
+            });
+        }
+        return { student: { id: student.id, name: student.name, admissionNumber: student.admissionNumber }, placements };
+    },
+    // Academic transcript across ALL classes/years the student has attended
+    getStudentTranscript: async (studentId) => {
+        const student = await db_1.default.student.findUnique({
+            where: { id: studentId },
+            select: {
+                id: true, name: true, admissionNumber: true, gender: true,
+                arm: { include: { class: true } },
+            },
+        });
+        if (!student)
+            throw new Error('Student not found');
+        const results = await db_1.default.result.findMany({
+            where: { studentId },
+            include: { subject: true, arm: { include: { class: true } }, academicYear: true },
+            orderBy: [{ academicYearId: 'asc' }, { term: 'asc' }, { subject: { name: 'asc' } }],
+        });
+        // Group results by class/level then academic year
+        const grouped = {};
+        for (const r of results) {
+            const className = r.arm ? `${r.arm.class?.name ?? ''} ${r.arm.letter}`.trim() : 'Unknown';
+            const year = r.academicYear?.name || 'Unknown';
+            const key = `${className}|${year}`;
+            if (!grouped[key])
+                grouped[key] = { className, academicYear: year, entries: [], average: 0 };
+            grouped[key].entries.push({
+                subject: r.subject.name,
+                ca: r.ca,
+                exam: r.exam,
+                total: r.total,
+                score: r.score,
+                grade: r.grade || '',
+                term: r.term,
+            });
+        }
+        const groups = Object.values(grouped).map(g => {
+            g.average = g.entries.length
+                ? Math.round((g.entries.reduce((s, e) => s + e.score, 0) / g.entries.length) * 100) / 100
+                : 0;
+            return g;
+        });
+        const overallAverage = results.length
+            ? Math.round((results.reduce((s, r) => s + r.score, 0) / results.length) * 100) / 100
+            : 0;
+        return {
+            student: {
+                id: student.id,
+                name: student.name,
+                admissionNumber: student.admissionNumber,
+                gender: student.gender,
+                currentClass: student.arm ? `${student.arm.class?.name ?? ''} ${student.arm.letter}`.trim() : '',
+            },
+            groups,
+            overallAverage,
+            totalSubjects: new Set(results.map(r => r.subjectId)).size,
+        };
     },
 };

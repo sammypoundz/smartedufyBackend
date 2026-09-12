@@ -248,17 +248,37 @@ export const studentService = {
     if (!tenantId) throw new Error('Tenant context missing');
     if (!id) throw new Error('Student ID is required');
 
-    await prisma.studentSubject.deleteMany({
-      where: { studentId: id, schoolId: tenantId },
-    });
-    const student = await prisma.student.delete({
-      where: { id, schoolId: tenantId },
-    });
-    // Remove the linked login account so the email can be reused on re-upload
-    if (student.userId) {
-      await prisma.user.deleteMany({ where: { id: student.userId, role: 'STUDENT' } });
-    }
-    return student;
+    /*
+     * Clean up every row that references the student (parent link requests,
+     * attendance, results, fees, test attempts, promotion history, subjects)
+     * then delete the student and its login account — all atomically.
+     * Mirrors the bulk deleteMany cleanup below; without this the student
+     * delete fails on FK constraints (e.g. when assigned to a parent).
+     */
+    return prisma.$transaction(
+      async (tx) => {
+      await tx.parentStudentLink.deleteMany({ where: { studentId: id, schoolId: tenantId } });
+      await tx.studentSubject.deleteMany({ where: { studentId: id, schoolId: tenantId } });
+      await tx.attendance.deleteMany({ where: { studentId: id } });
+      await tx.studentPromotionHistory.deleteMany({ where: { studentId: id } });
+      await tx.result.deleteMany({ where: { studentId: id } });
+      await tx.feePayment.deleteMany({ where: { studentId: id } });
+      await tx.studentFee.deleteMany({ where: { studentId: id } });
+      await tx.testAttempt.deleteMany({ where: { studentId: id } });
+
+      const student = await tx.student.delete({
+        where: { id, schoolId: tenantId },
+      });
+      // Remove the linked login account so the email can be reused on re-upload
+      if (student.userId) {
+        await tx.user.deleteMany({ where: { id: student.userId, role: 'STUDENT' } });
+      }
+      return student;
+      },
+      // Default 5s interactive timeout is too short for the many dependent
+      // deleteMany calls above (especially on a student linked to a parent)
+      { timeout: 20000, maxWait: 10000 },
+    );
   },
 
   // Bulk delete students (and their related records + login accounts) scoped to the tenant

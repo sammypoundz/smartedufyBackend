@@ -83,6 +83,39 @@ export function extractCounter(
   return nums && nums.length ? parseInt(nums[nums.length - 1], 10) : null;
 }
 
+/**
+ * Compute the highest counter value already in use for a role, by scanning
+ * the actual issued IDs (student admission numbers for STUDENT, user codes
+ * otherwise). Self-heals a stale/stuck stored counter so new IDs always
+ * increment past the last registration instead of repeating a fixed value.
+ */
+async function computeUsedFloorCounter(
+  tenantId: string,
+  role: string,
+  format: string,
+): Promise<number> {
+  let max = 0;
+  const bump = (id: string | null | undefined) => {
+    if (!id) return;
+    const n = extractCounter(id, format);
+    if (n !== null && n > max) max = n;
+  };
+
+  if (role === "STUDENT") {
+    const students = await prisma.student.findMany({
+      where: { schoolId: tenantId, admissionNumber: { not: null } },
+      select: { admissionNumber: true },
+    });
+    for (const s of students) bump(s.admissionNumber);
+  }
+  const users = await prisma.user.findMany({
+    where: { schoolId: tenantId, role: role as any, userIdCode: { not: null } },
+    select: { userIdCode: true },
+  });
+  for (const u of users) bump(u.userIdCode);
+  return max;
+}
+
 export const idGeneratorService = {
   /** All configs for the current school, keyed by role. */
   getAllConfigs: async () => {
@@ -147,7 +180,15 @@ export const idGeneratorService = {
     const year = new Date().getFullYear();
     // Yearly reset: when the format uses {YEAR} and the counter was last
     // reset in a previous year, the preview starts from 1 again.
-    let counter = config?.counter ?? 0;
+    if (!formatHasCounter(format)) {
+      throw new Error(
+        `ID format "${format}" has no counter token ({###}) — every generated ID would be identical. Fix it in Settings → ID Generator.`,
+      );
+    }
+    // Floor from actually-issued IDs so a stale stored counter can't make
+    // new IDs repeat a fixed/already-used value.
+    const floor = await computeUsedFloorCounter(tenantId, role, format);
+    let counter = Math.max(config?.counter ?? 0, floor);
     const usesYear = /\{YEAR\}/.test(format);
     if (usesYear && config?.lastResetYear !== year) {
       // Only show a reset preview if yearly reset is meaningful (never used
@@ -190,6 +231,11 @@ export const idGeneratorService = {
       });
       const format =
         config?.format ?? DEFAULT_ID_FORMATS[role] ?? "{ROLE}-{####}";
+      if (!formatHasCounter(format)) {
+        throw new Error(
+          `ID format "${format}" has no counter token ({###}) — every generated ID would be identical. Fix it in Settings → ID Generator.`,
+        );
+      }
       let counter = config?.counter ?? 0;
       // Yearly reset support: if the format uses {YEAR} and we haven't
       // reset in the current year, start from 0 again.
@@ -197,6 +243,11 @@ export const idGeneratorService = {
         counter = 0;
         config = { ...config, lastResetYear: year };
       }
+      // Self-heal: never issue an ID at or below a number already in use.
+      // This keeps admission numbers auto-incrementing past the last
+      // registration even when the stored counter is stale/stuck.
+      const floor = await computeUsedFloorCounter(tenantId, role, format);
+      counter = Math.max(counter, floor);
       const next = counter + 1;
       const id = renderId(format, next, role, year);
 

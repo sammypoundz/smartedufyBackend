@@ -7,6 +7,7 @@ exports.userService = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const tenantContext_1 = require("../utils/tenantContext");
+const idGeneratorService_1 = require("./idGeneratorService");
 exports.userService = {
     getAllUsers: async () => {
         // middleware adds schoolId to where automatically
@@ -35,7 +36,9 @@ exports.userService = {
                 name,
                 email: user.email,
                 role: user.role,
+                roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
                 isActive: user.isActive,
+                allowedPages: user.allowedPages || [],
                 createdAt: user.createdAt,
             };
         });
@@ -87,7 +90,9 @@ exports.userService = {
             name,
             email: user.email,
             role: user.role,
+            roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
             isActive: user.isActive,
+            allowedPages: user.allowedPages || [],
             createdAt: user.createdAt,
         };
     },
@@ -96,21 +101,77 @@ exports.userService = {
         if (!tenantId)
             throw new Error('Tenant context missing');
         const hashedPassword = await bcryptjs_1.default.hash(data.password, 10);
-        const user = await db_1.default.user.create({
-            data: {
-                name: data.name,
-                email: data.email,
-                password: hashedPassword,
-                role: data.role,
-                isActive: data.isActive,
-                schoolId: tenantId, // 👈 required
-            },
-            include: {
-                student: true,
-                teacher: true,
-                parent: true,
-            },
+        // ----- Auto / Manual ID assignment (before the transaction so duplicate
+        // errors surface early; the manual path also bumps the role counter) -----
+        let userIdCode;
+        if (data.idMode === 'MANUAL' && data.customId?.trim()) {
+            // Throws when the ID is already in use; bumps the counter if higher.
+            userIdCode = await idGeneratorService_1.idGeneratorService.registerManualId(data.role, data.customId);
+        }
+        else {
+            // AUTO (default): atomically claim the next ID for this role.
+            userIdCode = await idGeneratorService_1.idGeneratorService.claimNextId(data.role);
+        }
+        // Create the user AND its role-specific profile row atomically so all
+        // necessary tables are populated (data integrity).
+        const user = await db_1.default.$transaction(async (tx) => {
+            const created = await tx.user.create({
+                data: {
+                    name: data.name,
+                    email: data.email,
+                    password: hashedPassword,
+                    role: data.role,
+                    roles: data.roles?.length ? data.roles : [data.role].filter(Boolean),
+                    isActive: data.isActive,
+                    allowedPages: data.allowedPages || [],
+                    schoolId: tenantId, // 👈 required
+                    userIdCode,
+                },
+            });
+            if (created.role === 'TEACHER') {
+                await tx.teacher.create({
+                    data: {
+                        name: data.name,
+                        email: data.email,
+                        phone: '',
+                        userId: created.id,
+                        schoolId: tenantId,
+                    },
+                });
+            }
+            else if (created.role === 'PARENT') {
+                await tx.parent.create({
+                    data: {
+                        name: data.name,
+                        email: data.email,
+                        phone: '',
+                        userId: created.id,
+                        schoolId: tenantId,
+                    },
+                });
+            }
+            else if (created.role === 'STUDENT') {
+                await tx.student.create({
+                    data: {
+                        name: data.name,
+                        gender: '',
+                        userId: created.id,
+                        schoolId: tenantId,
+                        admissionNumber: userIdCode,
+                    },
+                });
+            }
+            return tx.user.findUnique({
+                where: { id: created.id },
+                include: {
+                    student: true,
+                    teacher: true,
+                    parent: true,
+                },
+            });
         });
+        if (!user)
+            throw new Error('User creation failed');
         let displayName = data.name;
         if (user.role === 'STUDENT' && user.student)
             displayName = user.student.name;
@@ -123,7 +184,10 @@ exports.userService = {
             name: displayName,
             email: user.email,
             role: user.role,
+            roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
             isActive: user.isActive,
+            allowedPages: user.allowedPages || [],
+            userIdCode: user.userIdCode,
             createdAt: user.createdAt,
         };
     },
@@ -157,7 +221,9 @@ exports.userService = {
             name: displayName,
             email: user.email,
             role: user.role,
+            roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
             isActive: user.isActive,
+            allowedPages: user.allowedPages || [],
             createdAt: user.createdAt,
         };
     },
@@ -165,9 +231,72 @@ exports.userService = {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        return db_1.default.user.delete({
-            where: { id, schoolId: tenantId },
+        // Delete dependent profile rows first so all related tables stay
+        // consistent (Payroll cascades automatically).
+        return db_1.default.$transaction(async (tx) => {
+            const teacher = await tx.teacher.findUnique({ where: { userId: id } });
+            if (teacher) {
+                // Detach teacher from arms / subject-arms before removal
+                await tx.arm.updateMany({
+                    where: { teacherId: teacher.id, schoolId: tenantId },
+                    data: { teacherId: null },
+                });
+                await tx.subjectArm.updateMany({
+                    where: { teacherId: teacher.id, schoolId: tenantId },
+                    data: { teacherId: null },
+                });
+                await tx.subjectTeacher.deleteMany({
+                    where: { teacherId: teacher.id, schoolId: tenantId },
+                });
+                await tx.teacher.delete({ where: { id: teacher.id, schoolId: tenantId } });
+            }
+            const parent = await tx.parent.findUnique({ where: { userId: id } });
+            if (parent) {
+                // Detach children before removing the parent record
+                await tx.student.updateMany({
+                    where: { parentId: parent.id, schoolId: tenantId },
+                    data: { parentId: null },
+                });
+                await tx.parent.delete({ where: { id: parent.id, schoolId: tenantId } });
+            }
+            const student = await tx.student.findUnique({ where: { userId: id } });
+            if (student) {
+                // Remove all records that reference the student before deleting
+                // (same cleanup as studentService.deleteMany).
+                await tx.attendance.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+                await tx.studentPromotionHistory.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+                await tx.result.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+                await tx.feePayment.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+                await tx.studentFee.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+                await tx.testAttempt.deleteMany({ where: { studentId: student.id, schoolId: tenantId } });
+                await tx.studentSubject.deleteMany({
+                    where: { studentId: student.id, schoolId: tenantId },
+                });
+                await tx.student.delete({ where: { id: student.id, schoolId: tenantId } });
+            }
+            return tx.user.delete({
+                where: { id, schoolId: tenantId },
+            });
         });
+    },
+    deleteMany: async (ids) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        let deleted = 0;
+        const failed = [];
+        // Reuse the single-delete cleanup logic per user (each runs in its own
+        // transaction) so dependent profile rows are handled consistently.
+        for (const id of ids) {
+            try {
+                await exports.userService.deleteUser(id);
+                deleted++;
+            }
+            catch {
+                failed.push(id);
+            }
+        }
+        return { deleted, failed };
     },
     updateStatus: async (id, isActive) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
@@ -194,7 +323,9 @@ exports.userService = {
             name: displayName,
             email: user.email,
             role: user.role,
+            roles: user.roles?.length ? user.roles : [user.role].filter(Boolean),
             isActive: user.isActive,
+            allowedPages: user.allowedPages || [],
             createdAt: user.createdAt,
         };
     },
