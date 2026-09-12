@@ -39,17 +39,24 @@ export function renderId(
   role: string,
   year = new Date().getFullYear(),
 ): string {
-  return format
+  const withTokens = format
     .replace(/\{(#+)\}/g, (_m, hashes: string) =>
       String(counter).padStart(hashes.length, "0"),
     )
     .replace(/\{YEAR\}/g, String(year))
     .replace(/\{ROLE\}/g, role);
+  if (formatHasCounter(format)) return withTokens;
+  // No explicit {###} token: treat the LAST digit run in the format as the
+  // counter (e.g. "GLS/TCH/26/001" → 001 becomes the incrementing part).
+  return withTokens.replace(
+    /(\d+)(?!.*\d)/,
+    (m) => String(counter).padStart(Math.max(m.length, 3), "0"),
+  );
 }
 
-/** True when the format contains at least one counter token. */
+/** True when the format contains a counter: an explicit {###} token or a digit run. */
 export function formatHasCounter(format: string): boolean {
-  return /\{#+\}/.test(format);
+  return /\{#+\}/.test(format) || /\d+(?!.*\d)/.test(format);
 }
 
 /**
