@@ -233,7 +233,13 @@ export const studentController = {
       res.json({ message: `Deleted ${result.deleted} student(s)`, ...result });
     } catch (err: any) {
       console.error('Bulk delete students error:', err);
-      res.status(500).json({ error: 'Failed to delete students' });
+      const detail =
+        err?.code === 'P2003'
+          ? 'Some students are still referenced by other records (e.g. parent links, fees or results). Remove those first.'
+          : typeof err?.message === 'string' && err.message !== 'Tenant context missing'
+          ? err.message
+          : 'Failed to delete students';
+      res.status(500).json({ error: detail });
     }
   },
 

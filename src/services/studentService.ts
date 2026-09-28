@@ -295,6 +295,7 @@ export const studentService = {
     const userIds = students.map((s) => s.userId).filter(Boolean);
 
     await prisma.studentSubject.deleteMany({ where: { studentId: { in: studentIds }, schoolId: tenantId } });
+    await prisma.parentStudentLink.deleteMany({ where: { studentId: { in: studentIds }, schoolId: tenantId } });
     await prisma.attendance.deleteMany({ where: { studentId: { in: studentIds } } });
     await prisma.studentPromotionHistory.deleteMany({ where: { studentId: { in: studentIds } } });
     await prisma.result.deleteMany({ where: { studentId: { in: studentIds } } });
