@@ -34,6 +34,7 @@ const updateStudentSchema = z.object({
     phone: z.string().optional(),
   }).optional(),
   guardianRelationship: z.string().optional(),
+  religion: z.string().optional(),
   isActive: z.boolean().optional(),
 }).refine(data => !(data.parentId && data.newParent), {
   message: "Cannot provide both parentId and newParent",

@@ -155,6 +155,7 @@ export const studentService = {
       parentId?: string | null;
       newParent?: { name: string; email: string; phone?: string };
       guardianRelationship?: string;
+      religion?: string;
       isActive?: boolean;
     }
   ) => {
@@ -172,6 +173,7 @@ export const studentService = {
       armId: string | null;
       parentId: string | null;
       guardianRelationship: string | null;
+      religion: string | null;
       isActive: boolean;
     }> = {};
 
@@ -183,6 +185,7 @@ export const studentService = {
     if (data.classId !== undefined) updateData.classId = data.classId;
     if (data.armId !== undefined) updateData.armId = data.armId;
     if (data.guardianRelationship !== undefined) updateData.guardianRelationship = data.guardianRelationship;
+    if (data.religion !== undefined) updateData.religion = data.religion;
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
     // Handle parentId – allow null, empty string, or valid ID

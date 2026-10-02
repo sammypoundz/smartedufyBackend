@@ -114,6 +114,7 @@ model Student {
   armId                String?   @db.ObjectId
   parentId             String?   @db.ObjectId
   guardianRelationship String?
+  religion             String?
   isActive             Boolean   @default(true)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
