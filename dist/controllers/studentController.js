@@ -7,6 +7,7 @@ exports.studentController = void 0;
 const studentService_1 = require("../services/studentService");
 const studentValidation_1 = require("../validations/studentValidation");
 const paramUtils_1 = require("../utils/paramUtils");
+const idGeneratorService_1 = require("../services/idGeneratorService");
 const zod_1 = require("zod");
 const db_1 = __importDefault(require("../config/db"));
 // --- Schemas ---
@@ -16,6 +17,9 @@ const createStudentSchema = zod_1.z.object({
     admissionNumber: zod_1.z.string().optional(),
     classId: zod_1.z.string().optional(),
     armId: zod_1.z.string().optional(),
+    // When true, the admission number is generated from the admin's
+    // ID Generator config (Settings → ID Generator) for the STUDENT role.
+    useDefaultId: zod_1.z.boolean().optional(),
 });
 // ✅ parentId accepts null (for unassigning)
 const updateStudentSchema = zod_1.z.object({
@@ -33,6 +37,7 @@ const updateStudentSchema = zod_1.z.object({
         phone: zod_1.z.string().optional(),
     }).optional(),
     guardianRelationship: zod_1.z.string().optional(),
+    religion: zod_1.z.string().optional(),
     isActive: zod_1.z.boolean().optional(),
 }).refine(data => !(data.parentId && data.newParent), {
     message: "Cannot provide both parentId and newParent",
@@ -150,7 +155,16 @@ exports.studentController = {
     create: async (req, res) => {
         try {
             const data = createStudentSchema.parse(req.body);
-            const student = await studentService_1.studentService.create(data);
+            /*
+             * Auto-ID path: when useDefaultId is set (and no manual admission
+             * number was supplied), atomically claim the next admission number
+             * from the admin's ID Generator config for the STUDENT role.
+             */
+            let admissionNumber = data.admissionNumber;
+            if (data.useDefaultId && !admissionNumber?.trim()) {
+                admissionNumber = await idGeneratorService_1.idGeneratorService.claimNextId('STUDENT');
+            }
+            const student = await studentService_1.studentService.create({ ...data, admissionNumber });
             res.status(201).json(student);
         }
         catch (err) {
@@ -186,6 +200,7 @@ exports.studentController = {
                 parentId: parentId,
                 newParent: data.newParent,
                 guardianRelationship: data.guardianRelationship,
+                religion: data.religion,
                 isActive: data.isActive,
             });
             if (!updated)
@@ -209,7 +224,14 @@ exports.studentController = {
         }
         catch (err) {
             console.error('Delete student error:', err);
-            res.status(500).json({ error: 'Failed to delete student' });
+            // Surface the real reason (e.g. still referenced by another record)
+            // instead of the generic message so the admin knows what to do.
+            const detail = err?.code === 'P2003'
+                ? 'This student is still referenced by other records (e.g. fees, results or a parent link). Remove those first.'
+                : typeof err?.message === 'string' && err.message !== 'Tenant context missing'
+                    ? err.message
+                    : 'Failed to delete student';
+            res.status(500).json({ error: detail });
         }
     },
     bulkDelete: async (req, res) => {
@@ -223,7 +245,12 @@ exports.studentController = {
         }
         catch (err) {
             console.error('Bulk delete students error:', err);
-            res.status(500).json({ error: 'Failed to delete students' });
+            const detail = err?.code === 'P2003'
+                ? 'Some students are still referenced by other records (e.g. parent links, fees or results). Remove those first.'
+                : typeof err?.message === 'string' && err.message !== 'Tenant context missing'
+                    ? err.message
+                    : 'Failed to delete students';
+            res.status(500).json({ error: detail });
         }
     },
     assignParent: async (req, res) => {

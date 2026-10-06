@@ -35,15 +35,33 @@ exports.DEFAULT_ID_FORMATS = {
  * A format without #'s still works (e.g. "{ROLE}-{YEAR}-0001" is fixed text).
  */
 function renderId(format, counter, role, year = new Date().getFullYear()) {
-    return format
-        .replace(/\{(#+)\}/g, (_m, hashes) => String(counter).padStart(hashes.length, "0"))
-        .replace(/\{YEAR\}/g, String(year))
-        .replace(/\{ROLE\}/g, role);
+    // Explicit {###} token: substitute the zero-padded counter there.
+    if (/\{#+\}/.test(format)) {
+        return format
+            .replace(/\{(#+)\}/g, (_m, hashes) => String(counter).padStart(hashes.length, "0"))
+            .replace(/\{YEAR\}/g, String(year))
+            .replace(/\{ROLE\}/g, role);
+    }
+    // No {###} token but the format contains digits (e.g. "GLS/STU/26/0001"):
+    // the LAST digit run is the incrementing counter; everything else stays
+    // literal — including a 2-digit year like "26" which is NOT the counter.
+    const m = format.match(/(\d+)(?!.*\d)/); // last digit run
+    if (!m || m.index === undefined)
+        return format; // pure literal, no counter
+    const pad = Math.max(m[1].length, 3, String(counter).length);
+    return (format.slice(0, m.index) +
+        String(counter).padStart(pad, "0") +
+        format.slice(m.index + m[1].length));
 }
-/** True when the format contains at least one counter token. */
+/** True when the format contains a counter: an explicit {###} token or a digit run. */
 function formatHasCounter(format) {
-    return /\{#+\}/.test(format);
+    return /\{#+\}/.test(format) || /\d+(?!.*\d)/.test(format);
 }
+/**
+ * Upper bound for a plausible sequence counter (9,999,999). Values above this
+ * are rejected so legacy timestamp-based IDs can't inflate the counter.
+ */
+const MAX_VALID_COUNTER = 9999999;
 /**
  * Extract the numeric counter from a manually entered ID, given the role's
  * format. Matches the numeric part that corresponds to the {###...} token so
@@ -57,18 +75,60 @@ function extractCounter(manualId, format) {
         .replace(/\\\{(#+)\\\}/g, (_m, hashes) => `(\\d{${hashes.length},})`)
         .replace(/\\\{YEAR\\\}/g, "\\d{4}")
         .replace(/\\\{ROLE\\\}/g, ".+");
+    let parsed = null;
     try {
         const re = new RegExp(`^${pattern}$`);
         const m = manualId.trim().match(re);
         if (m && m[1])
-            return parseInt(m[1], 10);
+            parsed = parseInt(m[1], 10);
     }
     catch {
         /* invalid pattern — fall through */
     }
     // Fallback: last number group in the string
-    const nums = manualId.trim().match(/\d+/g);
-    return nums && nums.length ? parseInt(nums[nums.length - 1], 10) : null;
+    if (parsed === null) {
+        const nums = manualId.trim().match(/\d+/g);
+        if (nums && nums.length)
+            parsed = parseInt(nums[nums.length - 1], 10);
+    }
+    // Sanity guard: anything larger than MAX_VALID_COUNTER is almost certainly
+    // a timestamp (e.g. Date.now() = 1789126841882) or other garbage that once
+    // leaked into an ID — NOT a legitimate sequence counter. Ignoring it keeps
+    // it from poisoning the stored counter / used-floor via Math.max().
+    if (parsed !== null && parsed > MAX_VALID_COUNTER)
+        return null;
+    return parsed;
+}
+/**
+ * Compute the highest counter value already in use for a role, by scanning
+ * the actual issued IDs (student admission numbers for STUDENT, user codes
+ * otherwise). Self-heals a stale/stuck stored counter so new IDs always
+ * increment past the last registration instead of repeating a fixed value.
+ */
+async function computeUsedFloorCounter(tenantId, role, format) {
+    let max = 0;
+    const bump = (id) => {
+        if (!id)
+            return;
+        const n = extractCounter(id, format);
+        if (n !== null && n > max)
+            max = n;
+    };
+    if (role === "STUDENT") {
+        const students = await prisma_1.prisma.student.findMany({
+            where: { schoolId: tenantId, admissionNumber: { not: null } },
+            select: { admissionNumber: true },
+        });
+        for (const s of students)
+            bump(s.admissionNumber);
+    }
+    const users = await prisma_1.prisma.user.findMany({
+        where: { schoolId: tenantId, role: role, userIdCode: { not: null } },
+        select: { userIdCode: true },
+    });
+    for (const u of users)
+        bump(u.userIdCode);
+    return max;
 }
 exports.idGeneratorService = {
     /** All configs for the current school, keyed by role. */
@@ -126,7 +186,17 @@ exports.idGeneratorService = {
         const year = new Date().getFullYear();
         // Yearly reset: when the format uses {YEAR} and the counter was last
         // reset in a previous year, the preview starts from 1 again.
-        let counter = config?.counter ?? 0;
+        if (!formatHasCounter(format)) {
+            throw new Error(`ID format "${format}" has no counter token ({###}) — every generated ID would be identical. Fix it in Settings → ID Generator.`);
+        }
+        // Floor from actually-issued IDs so a stale stored counter can't make
+        // new IDs repeat a fixed/already-used value.
+        const floor = await computeUsedFloorCounter(tenantId, role, format);
+        // A stored counter above MAX_VALID_COUNTER is legacy garbage (e.g. a
+        // timestamp bumped in by an old manual ID) — ignore it, start from the floor.
+        const stored = config?.counter ?? 0;
+        const safeStored = stored > MAX_VALID_COUNTER ? 0 : stored;
+        let counter = Math.max(safeStored, floor);
         const usesYear = /\{YEAR\}/.test(format);
         if (usesYear && config?.lastResetYear !== year) {
             // Only show a reset preview if yearly reset is meaningful (never used
@@ -164,22 +234,39 @@ exports.idGeneratorService = {
                 where: { schoolId_role: { schoolId: tenantId, role } },
             });
             const format = config?.format ?? exports.DEFAULT_ID_FORMATS[role] ?? "{ROLE}-{####}";
+            if (!formatHasCounter(format)) {
+                throw new Error(`ID format "${format}" has no counter token ({###}) — every generated ID would be identical. Fix it in Settings → ID Generator.`);
+            }
             let counter = config?.counter ?? 0;
             // Yearly reset support: if the format uses {YEAR} and we haven't
             // reset in the current year, start from 0 again.
+            let resetYear = null;
             if (/\{YEAR\}/.test(format) && config && config.lastResetYear !== year) {
                 counter = 0;
-                config = { ...config, lastResetYear: year };
+                resetYear = year;
             }
+            // Self-heal: never issue an ID at or below a number already in use.
+            // This keeps admission numbers auto-incrementing past the last
+            // registration even when the stored counter is stale/stuck.
+            const floor = await computeUsedFloorCounter(tenantId, role, format);
+            // Same stale/timestamp guard as in previewNextId.
+            if (counter > MAX_VALID_COUNTER)
+                counter = 0;
+            counter = Math.max(counter, floor);
             const next = counter + 1;
             const id = renderId(format, next, role, year);
             await tx.idGeneratorConfig.upsert({
                 where: { schoolId_role: { schoolId: tenantId, role } },
                 update: {
                     counter: next,
-                    ...(config?.lastResetYear
-                        ? { lastResetYear: config.lastResetYear }
-                        : {}),
+                    // Persist the reset year when a yearly reset fires; otherwise keep
+                    // the existing value. Without this, a config whose lastResetYear is
+                    // still null would "reset" on every claim and issue the same ID.
+                    ...(resetYear !== null
+                        ? { lastResetYear: resetYear }
+                        : config?.lastResetYear
+                            ? { lastResetYear: config.lastResetYear }
+                            : {}),
                 },
                 create: {
                     schoolId: tenantId,

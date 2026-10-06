@@ -167,6 +167,8 @@ exports.studentService = {
             updateData.armId = data.armId;
         if (data.guardianRelationship !== undefined)
             updateData.guardianRelationship = data.guardianRelationship;
+        if (data.religion !== undefined)
+            updateData.religion = data.religion;
         if (data.isActive !== undefined)
             updateData.isActive = data.isActive;
         // Handle parentId – allow null, empty string, or valid ID
@@ -229,17 +231,34 @@ exports.studentService = {
             throw new Error('Tenant context missing');
         if (!id)
             throw new Error('Student ID is required');
-        await db_1.default.studentSubject.deleteMany({
-            where: { studentId: id, schoolId: tenantId },
-        });
-        const student = await db_1.default.student.delete({
-            where: { id, schoolId: tenantId },
-        });
-        // Remove the linked login account so the email can be reused on re-upload
-        if (student.userId) {
-            await db_1.default.user.deleteMany({ where: { id: student.userId, role: 'STUDENT' } });
-        }
-        return student;
+        /*
+         * Clean up every row that references the student (parent link requests,
+         * attendance, results, fees, test attempts, promotion history, subjects)
+         * then delete the student and its login account — all atomically.
+         * Mirrors the bulk deleteMany cleanup below; without this the student
+         * delete fails on FK constraints (e.g. when assigned to a parent).
+         */
+        return db_1.default.$transaction(async (tx) => {
+            await tx.parentStudentLink.deleteMany({ where: { studentId: id, schoolId: tenantId } });
+            await tx.studentSubject.deleteMany({ where: { studentId: id, schoolId: tenantId } });
+            await tx.attendance.deleteMany({ where: { studentId: id } });
+            await tx.studentPromotionHistory.deleteMany({ where: { studentId: id } });
+            await tx.result.deleteMany({ where: { studentId: id } });
+            await tx.feePayment.deleteMany({ where: { studentId: id } });
+            await tx.studentFee.deleteMany({ where: { studentId: id } });
+            await tx.testAttempt.deleteMany({ where: { studentId: id } });
+            const student = await tx.student.delete({
+                where: { id, schoolId: tenantId },
+            });
+            // Remove the linked login account so the email can be reused on re-upload
+            if (student.userId) {
+                await tx.user.deleteMany({ where: { id: student.userId, role: 'STUDENT' } });
+            }
+            return student;
+        }, 
+        // Default 5s interactive timeout is too short for the many dependent
+        // deleteMany calls above (especially on a student linked to a parent)
+        { timeout: 20000, maxWait: 10000 });
     },
     // Bulk delete students (and their related records + login accounts) scoped to the tenant
     deleteMany: async (ids) => {
@@ -255,6 +274,7 @@ exports.studentService = {
         const studentIds = students.map((s) => s.id);
         const userIds = students.map((s) => s.userId).filter(Boolean);
         await db_1.default.studentSubject.deleteMany({ where: { studentId: { in: studentIds }, schoolId: tenantId } });
+        await db_1.default.parentStudentLink.deleteMany({ where: { studentId: { in: studentIds }, schoolId: tenantId } });
         await db_1.default.attendance.deleteMany({ where: { studentId: { in: studentIds } } });
         await db_1.default.studentPromotionHistory.deleteMany({ where: { studentId: { in: studentIds } } });
         await db_1.default.result.deleteMany({ where: { studentId: { in: studentIds } } });

@@ -100,6 +100,7 @@ router.post('/register', async (req, res, next) => {
                             userId: createdUser.id,
                             name: data.name,
                             email: data.email,
+                            gender: data.gender || null,
                             phone: data.phone || '',
                             schoolId,
                             registrationStatus: 'PENDING',

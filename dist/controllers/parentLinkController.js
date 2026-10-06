@@ -44,10 +44,12 @@ exports.parentLinkController = {
                 where: { parentId: parent.id },
                 select: { id: true },
             })).map((c) => c.id));
-            const students = await prisma_1.default.student.findMany({
-                where: {
-                    OR: [{ admissionNumber: { contains: q } }, { name: { contains: q } }],
-                },
+            /*
+             * Prisma's `contains` is case-sensitive on MongoDB (and `mode:
+             * 'insensitive'` isn't supported by the Mongo connector), so we fetch
+             * the tenant-scoped students and filter case-insensitively in JS.
+             */
+            const candidates = await prisma_1.default.student.findMany({
                 select: {
                     id: true,
                     name: true,
@@ -55,8 +57,13 @@ exports.parentLinkController = {
                     class: { select: { name: true } },
                     arm: { select: { letter: true } },
                 },
-                take: 15,
             });
+            const needle = q.toLowerCase();
+            const students = candidates
+                .filter((s) => (s.name && s.name.toLowerCase().includes(needle)) ||
+                (s.admissionNumber &&
+                    s.admissionNumber.toLowerCase().includes(needle)))
+                .slice(0, 15);
             // Duplicate prevention hints: flag students already linked to this parent
             // or already held by another parent, and those with an open request.
             const openRequests = await prisma_1.default.parentStudentLink.findMany({

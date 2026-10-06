@@ -193,6 +193,7 @@ export const studentController = {
         parentId: parentId,
         newParent: data.newParent,
         guardianRelationship: data.guardianRelationship,
+        religion: data.religion,
         isActive: data.isActive,
       });
       if (!updated) return res.status(404).json({ error: 'Student not found' });

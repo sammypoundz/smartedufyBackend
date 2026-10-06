@@ -35,6 +35,7 @@ exports.teacherRegistrationService = {
                 id: true,
                 name: true,
                 email: true,
+                gender: true,
                 phone: true,
                 teacherType: true,
                 briefSubjects: true,
@@ -74,6 +75,14 @@ exports.teacherRegistrationService = {
         const wantsForm = teacher.teacherType === "FORM_TEACHER" || teacher.teacherType === "BOTH";
         const wantsSubject = teacher.teacherType === "SUBJECT_TEACHER" ||
             teacher.teacherType === "BOTH";
+        // Form-teacher arms are ONLY meaningful when the teacher declared a form
+        // teacher role. A subject teacher's brief may still carry arm ids (they
+        // chose which arms they teach their subject in) — those must NEVER be
+        // turned into Arm.teacherId (form-teacher) assignments on approval.
+        const formArmIds = wantsForm ? brief.armIds || [] : [];
+        // Auto-assignment can touch many arms/subjects sequentially (with slow DB
+        // latency this exceeds Prisma's default 5s interactive timeout), so allow
+        // a generous budget and use upserts to minimise round-trips.
         const result = await db_1.default.$transaction(async (tx) => {
             const assignedArms = [];
             const assignedSubjects = [];
@@ -102,9 +111,9 @@ exports.teacherRegistrationService = {
             // ---- FORM TEACHER: head the arms they picked (fall back to the first
             //      arm of each chosen class for legacy briefs) ----
             if (wantsForm) {
-                if (brief.armIds?.length) {
+                if (formArmIds.length) {
                     const chosenArms = await tx.arm.findMany({
-                        where: { id: { in: brief.armIds }, classId: { in: tenantClassIds } },
+                        where: { id: { in: formArmIds }, classId: { in: tenantClassIds } },
                         include: { class: true },
                     });
                     for (const arm of chosenArms) {
@@ -113,6 +122,22 @@ exports.teacherRegistrationService = {
                             data: { teacherId: teacher.id },
                         });
                         assignedArms.push(`${arm.class.name} – Arm ${arm.letter}`);
+                    }
+                    // Fallback: brief had no arm ids — head every arm of the school's
+                    // classes so approval never silently no-ops.
+                    if (assignedArms.length === 0) {
+                        const allArms = await tx.arm.findMany({
+                            where: { classId: { in: tenantClassIds } },
+                            include: { class: true },
+                            take: 1,
+                        });
+                        for (const arm of allArms) {
+                            await tx.arm.update({
+                                where: { id: arm.id },
+                                data: { teacherId: teacher.id },
+                            });
+                            assignedArms.push(`${arm.class.name} – Arm ${arm.letter}`);
+                        }
                     }
                 }
                 else {
@@ -129,6 +154,8 @@ exports.teacherRegistrationService = {
                 }
             }
             // ---- SUBJECT TEACHER: attach to subject/arms + SubjectTeacher rows ----
+            // (Only creates SubjectTeacher / SubjectArm rows — never touches
+            // Arm.teacherId, so a subject teacher is never made a form teacher.)
             if (wantsSubject) {
                 for (const subject of subjectIds) {
                     // SubjectTeacher join (teacher teaches this subject)
@@ -148,10 +175,14 @@ exports.teacherRegistrationService = {
                         update: {},
                     });
                     // Attach the teacher to the subject in exactly the arms they chose
-                    // (subjectArms). Legacy briefs fall back to all arms of the classes
-                    // they chose.
-                    const pairs = brief.subjectArms?.filter((sa) => sa.subject === subject.name) ?? [];
-                    const armTargets = pairs.length
+                    // (subjectArms). Fallbacks for older/simpler briefs:
+                    //   1. all arms of the classes they chose,
+                    //   2. arms named by any subjectArms entries at all (subject saved
+                    //      without arm pairings),
+                    //   3. all arms in the school — so approval never silently no-ops.
+                    const anyPairs = brief.subjectArms ?? [];
+                    const pairs = anyPairs.filter((sa) => sa.subject === subject.name);
+                    let armTargets = pairs.length
                         ? (await tx.arm.findMany({
                             where: {
                                 id: { in: pairs.map((p) => p.armId) },
@@ -166,8 +197,35 @@ exports.teacherRegistrationService = {
                             id: arm.id,
                             label: `${cls.name} – Arm ${arm.letter}`,
                         })));
+                    if (armTargets.length === 0 && anyPairs.length > 0) {
+                        // Brief had arm pairings but none for this subject — assign to
+                        // the same arms the teacher used for their other subjects.
+                        armTargets = (await tx.arm.findMany({
+                            where: {
+                                id: {
+                                    in: [...new Set(anyPairs.map((p) => p.armId))],
+                                },
+                                classId: { in: tenantClassIds },
+                            },
+                            include: { class: true },
+                        })).map((arm) => ({
+                            id: arm.id,
+                            label: `${arm.class.name} – Arm ${arm.letter}`,
+                        }));
+                    }
+                    if (armTargets.length === 0) {
+                        // Last resort: every arm of the school, so the teacher isn't left
+                        // with no assignment at all after approval.
+                        armTargets = (await tx.arm.findMany({
+                            where: { classId: { in: tenantClassIds } },
+                            include: { class: true },
+                        })).map((arm) => ({
+                            id: arm.id,
+                            label: `${arm.class.name} – Arm ${arm.letter}`,
+                        }));
+                    }
                     for (const target of armTargets) {
-                        const subjectArm = await tx.subjectArm.findUnique({
+                        await tx.subjectArm.upsert({
                             where: {
                                 schoolId_subjectId_armId: {
                                     schoolId: tenantId,
@@ -175,23 +233,14 @@ exports.teacherRegistrationService = {
                                     armId: target.id,
                                 },
                             },
+                            create: {
+                                schoolId: tenantId,
+                                subjectId: subject.id,
+                                armId: target.id,
+                                teacherId: teacher.id,
+                            },
+                            update: { teacherId: teacher.id },
                         });
-                        if (subjectArm) {
-                            await tx.subjectArm.update({
-                                where: { id: subjectArm.id },
-                                data: { teacherId: teacher.id },
-                            });
-                        }
-                        else {
-                            await tx.subjectArm.create({
-                                data: {
-                                    schoolId: tenantId,
-                                    subjectId: subject.id,
-                                    armId: target.id,
-                                    teacherId: teacher.id,
-                                },
-                            });
-                        }
                     }
                     if (armTargets.length > 0) {
                         const byClass = new Map();
@@ -218,7 +267,7 @@ exports.teacherRegistrationService = {
                 data: { isActive: true },
             });
             return { assignedArms, assignedSubjects };
-        });
+        }, { timeout: 30000, maxWait: 10000 });
         return { teacherId: teacher.id, ...result };
     },
     /** Reject a pending registration — the teacher record/user stays but is deactivated. */
