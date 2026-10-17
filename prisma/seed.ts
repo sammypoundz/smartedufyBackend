@@ -12,54 +12,81 @@ function getGradeFromScore(score: number, scales: { minScore: number; maxScore: 
   return '?';
 }
 
+const SEED_SUBDOMAIN = 'default';
+
 async function main() {
   console.log('🌱 Starting seed – clearing existing data...');
 
-  // ---------- Correct deletion order (respect foreign keys) ----------
-  await prisma.message.deleteMany();
-  await prisma.testAttempt.deleteMany();
-  await prisma.question.deleteMany();
-  await prisma.test.deleteMany();
-  await prisma.studentPromotionHistory.deleteMany();
-  await prisma.result.deleteMany();
-  await prisma.term.deleteMany();
-  await prisma.academicYear.deleteMany();
-  await prisma.feePayment.deleteMany();
-  await prisma.studentFee.deleteMany();
-  await prisma.feeStructure.deleteMany();
-  await prisma.payroll.deleteMany();
-  await prisma.budget.deleteMany();
-  await prisma.expense.deleteMany();
-  await prisma.timetableEntry.deleteMany();
-  await prisma.topic.deleteMany();
-  await prisma.lessonPlan.deleteMany();
-  await prisma.assessmentFormat.deleteMany();
-  await prisma.studentSubject.deleteMany();
-  await prisma.attendance.deleteMany();
-  await prisma.subjectArm.deleteMany();
-  await prisma.subjectTeacher.deleteMany();
-  await prisma.armSkill.deleteMany();
-  await prisma.subjectSkill.deleteMany();
-  await prisma.skill.deleteMany();
-  await prisma.subject.deleteMany();
-  await prisma.arm.deleteMany();
-  await prisma.class.deleteMany();
-  await prisma.student.deleteMany();
-  await prisma.teacher.deleteMany();
-  await prisma.parent.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.gradingScale.deleteMany();
-  await prisma.school.deleteMany(); // 👈 now delete schools
+  // ---------- School-scoped cleanup ----------
+  // SAFETY: only delete data belonging to the target school (by subdomain).
+  // Other schools' data in the shared database is NEVER touched.
+  const existingSchool = await prisma.school.findUnique({ where: { subdomain: SEED_SUBDOMAIN } });
 
-  console.log('✅ Existing data cleared');
+  if (existingSchool) {
+    const schoolId = existingSchool.id;
+    console.log(`🗑️ Clearing data for school "${existingSchool.name}" (${SEED_SUBDOMAIN}) only...`);
+
+    // Correct deletion order (respect foreign keys), all scoped to schoolId
+    await prisma.message.deleteMany({ where: { schoolId } });
+    await prisma.testAttempt.deleteMany({ where: { schoolId } });
+    await prisma.question.deleteMany({ where: { schoolId } });
+    await prisma.questionDoc.deleteMany({ where: { schoolId } });
+    await prisma.test.deleteMany({ where: { schoolId } });
+    await prisma.studentPromotionHistory.deleteMany({ where: { schoolId } });
+    await prisma.result.deleteMany({ where: { schoolId } });
+    await prisma.term.deleteMany({ where: { schoolId } });
+    await prisma.academicYear.deleteMany({ where: { schoolId } });
+    await prisma.feePayment.deleteMany({ where: { schoolId } });
+    await prisma.studentFee.deleteMany({ where: { schoolId } });
+    await prisma.feeStructure.deleteMany({ where: { schoolId } });
+    await prisma.payroll.deleteMany({ where: { schoolId } });
+    await prisma.budget.deleteMany({ where: { schoolId } });
+    await prisma.expense.deleteMany({ where: { schoolId } });
+    await prisma.timetableEntry.deleteMany({ where: { schoolId } });
+    await prisma.timetableReview.deleteMany({ where: { schoolId } });
+    await prisma.teacherSlotPreference.deleteMany({ where: { schoolId } });
+    await prisma.teacherSubjectAssignment.deleteMany({ where: { schoolId } });
+    await prisma.topic.deleteMany({ where: { schoolId } });
+    await prisma.lessonPlan.deleteMany({ where: { schoolId } });
+    await prisma.assessmentFormat.deleteMany({ where: { schoolId } });
+    await prisma.studentSubject.deleteMany({ where: { schoolId } });
+    await prisma.attendance.deleteMany({ where: { schoolId } });
+    await prisma.subjectArm.deleteMany({ where: { schoolId } });
+    await prisma.subjectTeacher.deleteMany({ where: { schoolId } });
+    await prisma.armSkill.deleteMany({ where: { schoolId } });
+    await prisma.subjectSkill.deleteMany({ where: { schoolId } });
+    await prisma.skill.deleteMany({ where: { schoolId } });
+    await prisma.subject.deleteMany({ where: { schoolId } });
+    await prisma.arm.deleteMany({ where: { schoolId } });
+    await prisma.class.deleteMany({ where: { schoolId } });
+    await prisma.student.deleteMany({ where: { schoolId } });
+    await prisma.parentStudentLink.deleteMany({ where: { schoolId } });
+    await prisma.teacher.deleteMany({ where: { schoolId } });
+    await prisma.parent.deleteMany({ where: { schoolId } });
+    await prisma.user.deleteMany({ where: { schoolId } });
+    await prisma.gradingScale.deleteMany({ where: { schoolId } });
+    await prisma.gradingScaleGroup.deleteMany({ where: { schoolId } });
+    await prisma.promotionRule.deleteMany({ where: { schoolId } });
+    await prisma.reportCardTemplate.deleteMany({ where: { schoolId } });
+    await prisma.idGeneratorConfig.deleteMany({ where: { schoolId } });
+    await prisma.inventoryItem.deleteMany({ where: { schoolId } });
+    await prisma.auditLog.deleteMany({ where: { schoolId } });
+    await prisma.roleDef.deleteMany({ where: { schoolId } });
+    await prisma.bankDetail.deleteMany({ where: { schoolId } });
+
+    await prisma.school.delete({ where: { id: schoolId } });
+    console.log('✅ Target school data cleared (other schools untouched)');
+  } else {
+    console.log('ℹ️ No existing "default" school found – nothing to clear');
+  }
 
   // ---------- Create default school ----------
   const school = await prisma.school.upsert({
-    where: { subdomain: 'default' },
+    where: { subdomain: SEED_SUBDOMAIN },
     update: {},
     create: {
       name: 'Default School',
-      subdomain: 'default',
+      subdomain: SEED_SUBDOMAIN,
       isActive: true,
     },
   });

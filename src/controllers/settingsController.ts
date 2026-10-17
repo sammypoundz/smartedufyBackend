@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { settingsService } from '../services/settingsService';
+import { cloudinaryService } from '../services/cloudinaryService';
 import { idGeneratorService } from '../services/idGeneratorService';
 import {
   updateGeneralSettingsSchema,
@@ -43,6 +44,30 @@ export const settingsController = {
       if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
       console.error(err);
       res.status(500).json({ error: 'Failed to update general settings' });
+    }
+  },
+
+  uploadLogo: async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'No image file provided' });
+      }
+      if (!cloudinaryService.isConfigured()) {
+        return res.status(500).json({ error: 'Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.' });
+      }
+      const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml'];
+      if (!allowed.includes(req.file.mimetype)) {
+        return res.status(400).json({ error: 'Only PNG, JPG, WEBP or SVG images are allowed' });
+      }
+      if (req.file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({ error: 'Image must be smaller than 5MB' });
+      }
+      const logoUrl = await cloudinaryService.uploadLogo(req.file.buffer);
+      const result = await settingsService.updateLogo(logoUrl);
+      res.json({ ...result, logoUrl });
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to upload logo' });
     }
   },
 

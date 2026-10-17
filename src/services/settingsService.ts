@@ -9,7 +9,7 @@ export const settingsService = {
 
     const school = await prisma.school.findUnique({
       where: { id: tenantId },
-      select: { name: true, subdomain: true },
+      select: { name: true, subdomain: true, logoUrl: true },
     });
     const language = await prisma.globalSetting.findUnique({
       where: { key: 'language' },
@@ -17,6 +17,7 @@ export const settingsService = {
     return {
       schoolName: school?.name || '',
       language: language?.value || 'en',
+      logoUrl: school?.logoUrl || null,
     };
   },
 
@@ -37,6 +38,17 @@ export const settingsService = {
         create: { key: 'language', value: data.language },
       });
     }
+    return { success: true };
+  },
+
+  updateLogo: async (logoUrl: string) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    await prisma.school.update({
+      where: { id: tenantId },
+      data: { logoUrl },
+    });
     return { success: true };
   },
 

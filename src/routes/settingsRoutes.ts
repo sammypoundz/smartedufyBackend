@@ -2,6 +2,12 @@ import { Router } from 'express';
 import { settingsController } from '../controllers/settingsController';
 import { authMiddleware } from '../middleware/auth';
 import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
+import multer from 'multer';
+
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 const router = Router();
 router.use(authMiddleware, privilegeGuard('settings'));
@@ -9,6 +15,7 @@ router.use(authMiddleware, privilegeGuard('settings'));
 // General
 router.get('/general', settingsController.getGeneral);
 router.put('/general', roleGuard(['ADMIN']), settingsController.updateGeneral);
+router.put('/logo', roleGuard(['ADMIN']), logoUpload.single('logo'), settingsController.uploadLogo);
 
 // Academic
 router.get('/academic', settingsController.getAcademic);
