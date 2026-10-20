@@ -150,12 +150,20 @@ export const studentController = {
     try {
       const data = createStudentSchema.parse(req.body);
       /*
-       * Auto-ID path: when useDefaultId is set (and no manual admission
-       * number was supplied), atomically claim the next admission number
-       * from the admin's ID Generator config for the STUDENT role.
+       * ID handling for the STUDENT role:
+       *  - Manual/ad-hoc ID (e.g. an admission number typed in, or one carried
+       *    in an Excel upload): register it so it is checked for duplicates AND
+       *    bumps the shared counter past its number — otherwise the auto
+       *    counter never advances past manually-issued IDs and later auto IDs
+       *    collide with existing ones.
+       *  - No admission number: atomically claim the next ID from the admin's
+       *    ID Generator config. (useDefaultId is kept as an explicit opt-in
+       *    for the form flow, but bulk upload relies on the empty-number path.)
        */
       let admissionNumber = data.admissionNumber;
-      if (data.useDefaultId && !admissionNumber?.trim()) {
+      if (admissionNumber?.trim()) {
+        admissionNumber = await idGeneratorService.registerManualId('STUDENT', admissionNumber);
+      } else if (data.useDefaultId || !admissionNumber) {
         admissionNumber = await idGeneratorService.claimNextId('STUDENT');
       }
       const student = await studentService.create({ ...data, admissionNumber });

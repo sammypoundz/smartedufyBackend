@@ -1,0 +1,33 @@
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+School: Golden Light School (6a9d3681c77740a390a47c7d)  mode=APPLY
+Configured STUDENT format: GLS/STU/26/0001  (stored counter: 731)
+Students: 404; highest existing counter: 1110
+Students needing renumbering into "GLS/STU/26/0001": 81
+  - OBINNA JOHNPAUL UZOMA : "(none)"
+  - OCHE MAXSON SUNDAY: "(none)"
+  - OLUWADARASIMI ALABI TARAOLUWA: "GLS/0576"
+  - PARACULATA OSABUAHIEN : "(none)"
+  - PEACE PHILIYAN: "GLS/0218"
+  - PEREZ KEFAS: "(none)"
+  - PRECIOUS PWANABESHI: "GLS/0327"
+  - PRECIOUS YAKUBU: "(none)"
+  - RABI'AH ABDULLAHI TSIGA: "GLS/0683"
+  - RAHAMA ABDULLAHI: "(none)"
+  ... and 71 more
+
+First 10 new IDs:
+  (none) -> GLS/STU/26/1111
+  (none) -> GLS/STU/26/1112
+  GLS/0576 -> GLS/STU/26/1113
+  (none) -> GLS/STU/26/1114
+  GLS/0218 -> GLS/STU/26/1115
+  (none) -> GLS/STU/26/1116
+  GLS/0327 -> GLS/STU/26/1117
+  (none) -> GLS/STU/26/1118
+  GLS/0683 -> GLS/STU/26/1119
+  (none) -> GLS/STU/26/1120
+Last new ID: GLS/STU/26/1191
+Final counter should be: 1191
+
+✅ Updated 81 students. ID counter synced to 1191.
+⚠️  Students log in with their admission number — new IDs mean new logins.
