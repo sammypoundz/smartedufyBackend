@@ -222,22 +222,11 @@ export const idGeneratorService = {
     const stored = config?.counter ?? 0;
     const safeStored = stored > MAX_VALID_COUNTER ? 0 : stored;
     let counter = Math.max(safeStored, floor);
-    const usesYear = /\{YEAR\}/.test(format);
-    if (usesYear && config?.lastResetYear !== year) {
-      // Only show a reset preview if yearly reset is meaningful (never used
-      // yet, or reset happened in a previous year).
-      if (
-        config?.lastResetYear !== undefined &&
-        config.lastResetYear !== null &&
-        config.lastResetYear !== year
-      ) {
-        counter = 0;
-      } else if (
-        config?.lastResetYear === null ||
-        config?.lastResetYear === undefined
-      ) {
-        // First use — leave counter as-is (admin may have seeded it).
-      }
+    // Yearly reset: mirror claimNextId exactly — when the config exists and
+    // hasn't been reset in the current year, the counter restarts at 0. This
+    // keeps the preview in sync with what the next claim will actually issue.
+    if (/\{YEAR\}/.test(format) && config && config.lastResetYear !== year) {
+      counter = 0;
     }
     return {
       format,

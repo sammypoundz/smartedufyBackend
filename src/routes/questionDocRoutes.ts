@@ -5,7 +5,7 @@
 import { Router } from "express";
 import { prisma } from "../config/prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
-import { roleGuard } from "../middleware/roleGuard";
+import { roleGuard, privilegeGuard } from "../middleware/roleGuard";
 import { uploadQuestionDoc } from "../middleware/upload";
 import fs from "fs";
 import path from "path";
@@ -46,7 +46,7 @@ router.get("/mine", async (req: AuthRequest, res, next) => {
 // POST /api/question-docs — teacher uploads a question document (multipart)
 router.post(
   "/",
-  roleGuard(["ADMIN", "TEACHER", "PRINCIPAL", "VICE_PRINCIPAL"]),
+  privilegeGuard("cbt"),
   uploadQuestionDoc.single("file"),
   async (req: AuthRequest, res, next) => {
     try {
@@ -86,7 +86,7 @@ router.post(
 // PUT /api/question-docs/:id — owner edits (only PENDING for teachers)
 router.put(
   "/:id",
-  roleGuard(["ADMIN", "TEACHER", "PRINCIPAL", "VICE_PRINCIPAL"]),
+  privilegeGuard("cbt"),
   uploadQuestionDoc.single("file"),
   async (req: AuthRequest, res, next) => {
     try {
@@ -206,6 +206,7 @@ router.get("/", async (req: AuthRequest, res, next) => {
 router.patch(
   "/:id/review",
   roleGuard(["ADMIN", "PRINCIPAL", "VICE_PRINCIPAL"]),
+  privilegeGuard("cbt"),
   async (req: AuthRequest, res, next) => {
     try {
       const { decision, reviewNote } = req.body;

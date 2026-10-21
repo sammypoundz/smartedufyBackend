@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { resultController } from '../controllers/resultController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
@@ -20,7 +20,7 @@ router.get('/history', authMiddleware, resultController.getHistory);
 router.get('/', authMiddleware, resultController.getByFilters);
 
 // Bulk upsert results (create or update many)
-router.post('/bulk', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), resultController.bulkUpsert);
+router.post('/bulk', authMiddleware, privilegeGuard('results'), resultController.bulkUpsert);
 
 // ---------- NEW: Push test attempts to results ----------
 /**
@@ -28,7 +28,7 @@ router.post('/bulk', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), resultCont
  * Takes test attempt scores and creates Result records (CA or Exam).
  * Body: { testId, academicYearId, term, resultType }
  */
-router.post('/from-test-attempts', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), resultController.pushTestAttemptsToResults);
+router.post('/from-test-attempts', authMiddleware, privilegeGuard('results'), resultController.pushTestAttemptsToResults);
 console.log('✅ POST /from-test-attempts registered');
 
 // ---------- Routes with path parameters ----------
@@ -45,12 +45,12 @@ router.get('/subject/:subjectId', authMiddleware, resultController.getBySubject)
 router.get('/academic-year/:academicYearId', authMiddleware, resultController.getByAcademicYear);
 
 // Create a new result (single)
-router.post('/', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), resultController.create);
+router.post('/', authMiddleware, privilegeGuard('results'), resultController.create);
 
 // Update an existing result
-router.put('/:id', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), resultController.update);
+router.put('/:id', authMiddleware, privilegeGuard('results'), resultController.update);
 
 // Delete a result
-router.delete('/:id', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), resultController.delete);
+router.delete('/:id', authMiddleware, privilegeGuard('results'), resultController.delete);
 
 export default router;

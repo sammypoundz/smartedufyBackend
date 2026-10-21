@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { armController } from '../controllers/armController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
@@ -16,7 +16,7 @@ router.get('/my-assignments', authMiddleware, roleGuard(['TEACHER']), armControl
 router.get('/', authMiddleware, armController.getAll);
 
 // Direct subject‑arm deletion (used to remove a subject from a teacher)
-router.delete('/subject-arms/:id', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), armController.deleteSubjectArm);
+router.delete('/subject-arms/:id', authMiddleware, privilegeGuard('subjects'), armController.deleteSubjectArm);
 
 // ---------- Routes with :armId prefix ----------
 // Get simplified list of subjects for an arm (used by results page)
@@ -29,28 +29,28 @@ router.get('/:armId/students', authMiddleware, armController.getArmStudents);
 router.get('/:armId/subjects', authMiddleware, armController.getArmSubjects);
 
 // Add a subject to an arm (admin or teacher)
-router.post('/:armId/subjects', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), armController.addSubjectToArm);
+router.post('/:armId/subjects', authMiddleware, privilegeGuard('subjects'), armController.addSubjectToArm);
 
 // Update the teacher for a subject assigned to an arm
-router.patch('/:armId/subjects/:subjectId/teacher', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), armController.updateArmSubjectTeacher);
+router.patch('/:armId/subjects/:subjectId/teacher', authMiddleware, privilegeGuard('subjects'), armController.updateArmSubjectTeacher);
 
 // Remove a subject from an arm
-router.delete('/:armId/subjects/:subjectId', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), armController.removeArmSubject);
+router.delete('/:armId/subjects/:subjectId', authMiddleware, privilegeGuard('subjects'), armController.removeArmSubject);
 
 // Add a skill to an arm (admin or teacher)
-router.post('/:armId/skills', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), armController.addSkillToArm);
+router.post('/:armId/skills', authMiddleware, privilegeGuard('subjects'), armController.addSkillToArm);
 
 // ---------- Generic arm CRUD (must come last, after all routes with specific prefixes) ----------
 // Get a single arm by its ID (used in OpenArm page)
 router.get('/:id', authMiddleware, armController.getById);
 
 // Create a new arm (admin only)
-router.post('/', authMiddleware, roleGuard(['ADMIN']), armController.create);
+router.post('/', authMiddleware, privilegeGuard('classes'), armController.create);
 
 // Update an existing arm (admin only)
-router.patch('/:id', authMiddleware, roleGuard(['ADMIN']), armController.update);
+router.patch('/:id', authMiddleware, privilegeGuard('classes'), armController.update);
 
 // Delete an arm (admin only)
-router.delete('/:id', authMiddleware, roleGuard(['ADMIN']), armController.delete);
+router.delete('/:id', authMiddleware, privilegeGuard('classes'), armController.delete);
 
 export default router;

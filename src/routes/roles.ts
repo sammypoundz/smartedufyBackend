@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../config/prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
+import { privilegeGuard } from "../middleware/auth";
 import {
   ALL_PRIVILEGES,
   DEFAULT_ROLES,
@@ -61,7 +62,7 @@ export async function ensureSystemRoles(schoolId: string) {
 // backward compatibility with existing imports.)
 export { resolvePrivileges } from "../services/privilegeService";
 
-router.use(authMiddleware);
+router.use(authMiddleware, privilegeGuard('roles'));
 
 // List all roles for the school (auto-creates system roles on first call).
 router.get("/", async (req: AuthRequest, res, next) => {

@@ -4,6 +4,58 @@ import { getCurrentTenantId } from '../utils/tenantContext';
 import { idGeneratorService } from './idGeneratorService';
 
 export const userService = {
+  /**
+   * Ensure the role-specific profile row exists for every role the user
+   * holds (primary role OR any secondary role in `roles`). Without this,
+   * a user with a dual role like ACCOUNTANT + TEACHER never gets a Teacher
+   * profile and therefore cannot appear on the Teachers page or be given
+   * teacher functionality (arms, subjects, results, etc.).
+   */
+  syncProfileRows: async (
+    tx: {
+      teacher: { findUnique: Function; create: Function };
+      parent: { findUnique: Function; create: Function };
+      student: { findUnique: Function; create: Function };
+    },
+    user: { id: string; name?: string; email?: string; role: string; roles?: string[] },
+  ) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+    const heldRoles = Array.from(new Set([...(user.roles || []), user.role])).filter(Boolean);
+
+    if (heldRoles.includes('TEACHER')) {
+      const existing = await tx.teacher.findUnique({ where: { userId: user.id } });
+      if (!existing) {
+        await tx.teacher.create({
+          data: {
+            name: user.name || user.email || '',
+            email: user.email || '',
+            phone: '',
+            userId: user.id,
+            schoolId: tenantId,
+          },
+        });
+      }
+    }
+    if (heldRoles.includes('PARENT')) {
+      const existing = await tx.parent.findUnique({ where: { userId: user.id } });
+      if (!existing) {
+        await tx.parent.create({
+          data: {
+            name: user.name || user.email || '',
+            email: user.email || '',
+            phone: '',
+            userId: user.id,
+            schoolId: tenantId,
+          },
+        });
+      }
+    }
+    // Student profile is deliberately NOT auto-created from `roles` — student
+    // rows carry admission numbers, class placement and other required data
+    // that must be provisioned through the student enrolment flow.
+  },
+
   getAllUsers: async () => {
     // middleware adds schoolId to where automatically
     const users = await prisma.user.findMany({
@@ -164,6 +216,11 @@ export const userService = {
         });
       }
 
+      // Ensure profile rows exist for secondary roles too (e.g. a user with
+      // roles = [ACCOUNTANT, TEACHER] needs a Teacher profile row even though
+      // the primary role is ACCOUNTANT).
+      await userService.syncProfileRows(tx as any, created as any);
+
       return tx.user.findUnique({
         where: { id: created.id },
         include: {
@@ -221,6 +278,11 @@ export const userService = {
         parent: true,
       },
     });
+
+    // Roles may have changed — make sure profile rows exist for every role
+    // now held (e.g. adding TEACHER to an accountant needs a Teacher profile
+    // so the user appears on the Teachers page and can be given arms/subjects).
+    await userService.syncProfileRows(prisma as any, user as any);
 
     let displayName = user.name;
     if (user.role === 'STUDENT' && user.student) displayName = user.student.name;

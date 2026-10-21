@@ -75,7 +75,7 @@ export const SYSTEM_ROLE_PRIVILEGES: Record<string, string[]> = {
     "cbt",
   ],
   BURSAR: ["fees", "expenses", "reports", "inventory"],
-  ACCOUNTANT: ["fees", "expenses", "reports", "payroll"],
+  ACCOUNTANT: ["fees", "expenses", "payroll"],
   LIBRARIAN: ["inventory", "students"],
 };
 

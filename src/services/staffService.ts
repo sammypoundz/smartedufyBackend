@@ -5,8 +5,13 @@ import { getCurrentTenantId } from '../utils/tenantContext';
 
 // ---------- Helper: build staff response ----------
 export const buildStaffResponse = async (user: any) => {
+  // Multi-role aware: a user may hold TEACHER as a secondary role
+  // (e.g. roles = [ACCOUNTANT, TEACHER]), not just as the primary role.
+  const heldRoles: string[] = Array.from(
+    new Set([...(user.roles || []), user.role]),
+  ).filter(Boolean);
   let teacherData = null;
-  if (user.role === 'TEACHER') {
+  if (heldRoles.includes('TEACHER')) {
     teacherData = await prisma.teacher.findUnique({
       where: { userId: user.id },
       include: {
@@ -21,11 +26,12 @@ export const buildStaffResponse = async (user: any) => {
     name: user.name || '',
     email: user.email,
     role: user.role,
+    roles: heldRoles,
     isActive: user.isActive,
     createdAt: user.createdAt,
   };
 
-  if (user.role === 'TEACHER' && teacherData) {
+  if (heldRoles.includes('TEACHER') && teacherData) {
     const arms = teacherData.arms || [];
     const subjectArms = teacherData.subjectArms || [];
     staff.teacherType = arms.length > 0 ? 'class_teacher' :
@@ -64,8 +70,15 @@ export const staffService = {
   // Get all staff (users with staff roles) – middleware adds schoolId
   getAllStaff: async () => {
     const STAFF_ROLES: Role[] = ['ADMIN', 'TEACHER', 'PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN'];
+    // Multi-role aware: include users whose primary role OR any secondary
+    // role (in `roles`) is a staff role.
     const users = await prisma.user.findMany({
-      where: { role: { in: STAFF_ROLES } },
+      where: {
+        OR: [
+          { role: { in: STAFF_ROLES } },
+          { roles: { hasSome: STAFF_ROLES as any } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
     });
     return Promise.all(users.map(buildStaffResponse));
@@ -86,6 +99,7 @@ export const staffService = {
     name: string;
     email: string;
     role: Role;
+    extraRoles?: string[];
     hashedPassword: string;
     teacherType?: string;
     assignedClass?: string;
@@ -94,7 +108,12 @@ export const staffService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const { name, email, role, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
+    const { name, email, role, extraRoles, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
+    // Dual-role support: secondary roles chosen in the staff form (e.g. an
+    // Accountant who also teaches) are stored in User.roles so privilege
+    // resolution, the Teachers page and teacher functions all see them.
+    const roles = Array.from(new Set([...(extraRoles || []), role]));
+    const isTeacher = roles.includes('TEACHER');
 
     // Create the user and any role-specific records atomically
     const user = await prisma.$transaction(async (tx) => {
@@ -104,12 +123,13 @@ export const staffService = {
           email,
           password: hashedPassword,
           role,
+          roles,
           isActive: true,
           schoolId: tenantId,
         },
       });
 
-      if (role === 'TEACHER') {
+      if (isTeacher) {
         const teacher = await tx.teacher.create({
           data: {
             name: name || '',
@@ -163,6 +183,7 @@ export const staffService = {
     name?: string;
     email?: string;
     role?: Role;
+    extraRoles?: string[];
     teacherType?: string;
     assignedClass?: string;
     assignedSubjects?: { subject: string; class: string }[];
@@ -170,7 +191,7 @@ export const staffService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const { name, email, role, teacherType, assignedClass, assignedSubjects } = data;
+    const { name, email, role, extraRoles, teacherType, assignedClass, assignedSubjects } = data;
 
     const user = await prisma.user.findUnique({
       where: { id, schoolId: tenantId },
@@ -181,14 +202,23 @@ export const staffService = {
     if (name !== undefined) userUpdateData.name = name;
     if (email !== undefined) userUpdateData.email = email;
     if (role !== undefined) userUpdateData.role = role;
+    // Dual-role support: `extraRoles` carries the secondary roles chosen in
+    // the staff form. When provided, rebuild the full roles array (always
+    // including the effective primary role) so editing a user keeps every
+    // role they hold.
+    if (extraRoles !== undefined) {
+      const primary = role !== undefined ? role : user.role;
+      userUpdateData.roles = Array.from(new Set([...(extraRoles || []), primary]));
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id, schoolId: tenantId },
       data: userUpdateData,
     });
 
-    // Handle teacher sync
-    if (role === 'TEACHER') {
+    // Handle teacher sync — TEACHER may be primary or a secondary role.
+    const effectiveRoles = Array.from(new Set([...(userUpdateData.roles || []), userUpdateData.role || user.role])).filter(Boolean);
+    if (effectiveRoles.includes('TEACHER')) {
       let teacher = await prisma.teacher.findUnique({
         where: { userId: id, schoolId: tenantId },
       });
@@ -256,15 +286,21 @@ export const staffService = {
           }
         }
       }
-    } else {
-      // If role changed from TEACHER, delete teacher record (tenant-scoped)
-      const teacher = await prisma.teacher.findUnique({
-        where: { userId: id, schoolId: tenantId },
-      });
-      if (teacher) {
-        await prisma.teacher.delete({
-          where: { id: teacher.id, schoolId: tenantId },
+    } else if (role !== undefined) {
+      // Only remove the Teacher profile when the primary role was EXPLICITLY
+      // changed away from TEACHER. The else-branch used to run on every
+      // update (even a simple name edit of a non-teacher), silently deleting
+      // the Teacher profile of dual-role users (e.g. ACCOUNTANT + TEACHER).
+      const heldRoles = Array.from(new Set([...(updatedUser.roles || []), updatedUser.role])).filter(Boolean);
+      if (!heldRoles.includes('TEACHER')) {
+        const teacher = await prisma.teacher.findUnique({
+          where: { userId: id, schoolId: tenantId },
         });
+        if (teacher) {
+          await prisma.teacher.delete({
+            where: { id: teacher.id, schoolId: tenantId },
+          });
+        }
       }
     }
 

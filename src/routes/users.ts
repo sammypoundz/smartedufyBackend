@@ -1,27 +1,28 @@
 import { Router } from 'express';
 import { userController } from '../controllers/userController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
+import { privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
-// User management endpoints (require ADMIN role)
-router.use(authMiddleware, privilegeGuard('user-management'));
+// User management endpoints — gated on the 'user-management' privilege so
+// granted non-admin users get full CRUD, not just read-only.
+router.use(authMiddleware, privilegeGuard('users'));
 
 // Existing recent users endpoint
 router.get('/recent', userController.getRecentUsers);
 
 // Preview the next auto-generated ID for a role (before saving the user).
 // MUST be registered before '/:id' so 'next-id' is not treated as an id.
-router.get('/next-id', roleGuard(['ADMIN']), userController.getNextId);
+router.get('/next-id', userController.getNextId);
 
-// User management endpoints (require ADMIN role)
-router.get('/', roleGuard(['ADMIN']), userController.getAllUsers);
-router.get('/:id', roleGuard(['ADMIN']), userController.getUserById);
-router.post('/', roleGuard(['ADMIN']), userController.createUser);
-router.put('/:id', roleGuard(['ADMIN']), userController.updateUser);
-router.delete('/:id', roleGuard(['ADMIN']), userController.deleteUser);
-router.post('/bulk-delete', roleGuard(['ADMIN']), userController.bulkDelete);
-router.patch('/:id/status', roleGuard(['ADMIN']), userController.updateStatus);
+// User management endpoints (gated on the 'user-management' privilege)
+router.get('/', userController.getAllUsers);
+router.get('/:id', userController.getUserById);
+router.post('/', userController.createUser);
+router.put('/:id', userController.updateUser);
+router.delete('/:id', userController.deleteUser);
+router.post('/bulk-delete', userController.bulkDelete);
+router.patch('/:id/status', userController.updateStatus);
 
 export default router;

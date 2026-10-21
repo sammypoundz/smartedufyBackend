@@ -1,28 +1,28 @@
 import { Router } from 'express';
 import { questionController } from '../controllers/questionController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 import { uploadQuestion } from '../middleware/upload';
 
 const router = Router();
 
 // ---------- CRUD endpoints ----------
-// Question bank — all questions in the school (ADMIN/TEACHER)
-router.get('/bank', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), questionController.getBank);
+// Question bank — all questions in the school
+router.get('/bank', authMiddleware, privilegeGuard('cbt'), questionController.getBank);
 
 // Get all questions for a test – accessible to any authenticated user (including students)
 router.get('/test/:testId', authMiddleware, questionController.getByTestId);
 
-// Create, update, delete, and upload are restricted to ADMIN/TEACHER only
-router.post('/', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), questionController.create);
-router.put('/:id', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), questionController.update);
-router.delete('/:id', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), questionController.delete);
+// Create, update, delete, and upload require the 'cbt' privilege
+router.post('/', authMiddleware, privilegeGuard('cbt'), questionController.create);
+router.put('/:id', authMiddleware, privilegeGuard('cbt'), questionController.update);
+router.delete('/:id', authMiddleware, privilegeGuard('cbt'), questionController.delete);
 
 // File upload endpoint for question attachments
 router.post(
   '/upload',
   authMiddleware,
-  roleGuard(['ADMIN', 'TEACHER']),
+  privilegeGuard('cbt'),
   uploadQuestion.single('file'),
   questionController.uploadMedia
 );

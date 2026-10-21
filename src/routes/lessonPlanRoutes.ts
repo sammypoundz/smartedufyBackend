@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { lessonPlanController } from '../controllers/lessonPlanController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 import { upload } from '../middleware/upload';
 
 const router = Router();
@@ -16,18 +16,18 @@ router.get('/:id/download', lessonPlanController.download);
 
 router.post(
   '/',
-  roleGuard(['ADMIN', 'TEACHER']),
+  privilegeGuard('lesson-plan'),
   upload.single('file'),
   lessonPlanController.create
 );
 
 router.put(
   '/:id',
-  roleGuard(['ADMIN', 'TEACHER']),
+  privilegeGuard('lesson-plan'),
   upload.single('file'),
   lessonPlanController.update
 );
 
-router.delete('/:id', roleGuard(['ADMIN']), lessonPlanController.delete);
+router.delete('/:id', privilegeGuard('lesson-plan'), lessonPlanController.delete);
 
 export default router;

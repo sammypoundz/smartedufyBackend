@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { inventoryController } from '../controllers/inventoryController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
@@ -20,21 +20,21 @@ router.get('/:id', inventoryController.getById);
 // POST /api/inventory – create (admin/bursar only)
 router.post(
   '/',
-  roleGuard(['ADMIN', 'BURSAR']),
+  privilegeGuard('inventory'),
   inventoryController.create
 );
 
 // PUT /api/inventory/:id – update (admin/bursar only)
 router.put(
   '/:id',
-  roleGuard(['ADMIN', 'BURSAR']),
+  privilegeGuard('inventory'),
   inventoryController.update
 );
 
 // DELETE /api/inventory/:id – delete (admin/bursar only)
 router.delete(
   '/:id',
-  roleGuard(['ADMIN', 'BURSAR']),
+  privilegeGuard('inventory'),
   inventoryController.delete
 );
 

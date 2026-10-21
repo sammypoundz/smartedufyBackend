@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { attendanceController } from '../controllers/attendanceController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
@@ -25,13 +25,13 @@ router.get('/arm/:armId', authMiddleware, attendanceController.getByArm);
  * Body: { date: string, records: [{ studentId: string, present: boolean }] }
  * Saves/updates attendance for the given date.
  */
-router.post('/arm/:armId', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), attendanceController.saveAttendance);
+router.post('/arm/:armId', authMiddleware, privilegeGuard('students'), attendanceController.saveAttendance);
 
 /**
  * Legacy endpoint – kept for backward compatibility
  * POST /api/attendance/mark
  * Body: { date: string, records: [{ studentId: string, present: boolean }] }
  */
-router.post('/mark', authMiddleware, roleGuard(['ADMIN', 'TEACHER']), attendanceController.mark);
+router.post('/mark', authMiddleware, privilegeGuard('students'), attendanceController.mark);
 
 export default router;

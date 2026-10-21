@@ -25,6 +25,9 @@ const createStaffSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   role: z.string(),
+  // Secondary roles (dual-role support), e.g. ['TEACHER'] for an
+  // accountant who also teaches.
+  extraRoles: z.array(z.string()).optional(),
   teacherType: z.string().optional(),
   assignedClass: z.string().optional(),
   assignedSubjects: z.any().optional(), // can be array or JSON string
@@ -76,12 +79,16 @@ export const staffController = {
     try {
       // Validate with Zod
       const validated = createStaffSchema.parse(req.body);
-      const { name, email, role, teacherType, assignedClass, assignedSubjects } = validated;
+      const { name, email, role, extraRoles, teacherType, assignedClass, assignedSubjects } = validated;
 
       const enumRole = roleMap[role];
       if (!enumRole || !STAFF_ROLES.includes(enumRole)) {
         return res.status(400).json({ error: 'Invalid staff role' });
       }
+      // Validate + normalize secondary roles to their enum values.
+      const extraEnumRoles = (extraRoles || [])
+        .map((r: string) => roleMap[r])
+        .filter((r: Role | undefined): r is Role => !!r && STAFF_ROLES.includes(r) && r !== enumRole);
 
       // Check if email exists
       const existing = await prisma.user.findUnique({ where: { email } });
@@ -96,6 +103,7 @@ export const staffController = {
         name,
         email,
         role: enumRole,
+        extraRoles: extraEnumRoles,
         hashedPassword,
         teacherType,
         assignedClass,
@@ -120,7 +128,7 @@ export const staffController = {
     try {
       // Use Zod for validation (optional fields)
       const validated = createStaffSchema.partial().parse(req.body);
-      const { name, email, role, teacherType, assignedClass, assignedSubjects } = validated;
+      const { name, email, role, extraRoles, teacherType, assignedClass, assignedSubjects } = validated;
 
       let enumRole: Role | undefined;
       if (role) {
@@ -129,6 +137,11 @@ export const staffController = {
           return res.status(400).json({ error: 'Invalid staff role' });
         }
       }
+      const extraEnumRoles = extraRoles !== undefined
+        ? (extraRoles as string[])
+            .map((r) => roleMap[r])
+            .filter((r: Role | undefined): r is Role => !!r && STAFF_ROLES.includes(r) && r !== enumRole)
+        : undefined;
 
       const subjectsArray = parseAssignedSubjects(assignedSubjects);
 
@@ -136,6 +149,7 @@ export const staffController = {
         name,
         email,
         role: enumRole,
+        extraRoles: extraEnumRoles,
         teacherType,
         assignedClass,
         assignedSubjects: subjectsArray,

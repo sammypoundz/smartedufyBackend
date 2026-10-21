@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { classController } from '../controllers/classController';
 import { armController } from '../controllers/armController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
@@ -29,37 +29,37 @@ router.get('/:id', authMiddleware, classController.getById);
  * POST /api/classes
  * Create a new class (admin only)
  */
-router.post('/', authMiddleware, roleGuard(['ADMIN']), classController.create);
+router.post('/', authMiddleware, privilegeGuard('classes'), classController.create);
 
 /**
  * PUT /api/classes/:id
  * Update a class name (admin only)
  */
-router.put('/:id', authMiddleware, roleGuard(['ADMIN']), classController.update);
+router.put('/:id', authMiddleware, privilegeGuard('classes'), classController.update);
 
 /**
  * DELETE /api/classes/:id
  * Delete a class (admin only)
  */
-router.delete('/:id', authMiddleware, roleGuard(['ADMIN']), classController.delete);
+router.delete('/:id', authMiddleware, privilegeGuard('classes'), classController.delete);
 
 // ==================== PROTECTED ARM ROUTES ====================
 /**
  * POST /api/arms
  * Create a new arm under a class (admin only)
  */
-router.post('/arms', authMiddleware, roleGuard(['ADMIN']), armController.create);
+router.post('/arms', authMiddleware, privilegeGuard('classes'), armController.create);
 
 /**
  * PATCH /api/arms/:id
  * Update an existing arm (admin only)
  */
-router.patch('/arms/:id', authMiddleware, roleGuard(['ADMIN']), armController.update);
+router.patch('/arms/:id', authMiddleware, privilegeGuard('classes'), armController.update);
 
 /**
  * DELETE /api/arms/:id
  * Delete an arm (admin only)
  */
-router.delete('/arms/:id', authMiddleware, roleGuard(['ADMIN']), armController.delete);
+router.delete('/arms/:id', authMiddleware, privilegeGuard('classes'), armController.delete);
 
 export default router;

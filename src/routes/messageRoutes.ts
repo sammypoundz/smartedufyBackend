@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { messageController } from '../controllers/messageController';
 import { authMiddleware } from '../middleware/auth';
-import { roleGuard } from '../middleware/roleGuard';
+import { roleGuard, privilegeGuard } from '../middleware/roleGuard';
 
 const router = Router();
 
@@ -11,7 +11,7 @@ router.use(authMiddleware);
 // 📤 Send a broadcast message – only admins, bursars, and teachers
 router.post(
   '/broadcast',
-  roleGuard(['ADMIN', 'BURSAR', 'TEACHER']),
+  privilegeGuard('messaging'),
   messageController.sendBroadcast
 );
 
