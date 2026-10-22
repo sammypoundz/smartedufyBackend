@@ -1,7 +1,7 @@
 import prisma from '../config/db';
 import { getCurrentTenantId } from '../utils/tenantContext';
 
-export type PushResultType = 'ca1' | 'ca2' | 'ca' | 'exam';
+export type PushResultType = 'ca1' | 'ca2' | 'ca3' | 'ca' | 'exam';
 
 export interface ResultInput {
   studentId: string;
@@ -9,6 +9,9 @@ export interface ResultInput {
   armId: string;
   term: string;
   ca: number;
+  ca1?: number;
+  ca2?: number;
+  ca3?: number;
   exam: number;
   total: number;
   grade?: string;
@@ -139,6 +142,9 @@ export const resultService = {
         studentId: true,
         subjectId: true,
         ca: true,
+        ca1: true,
+        ca2: true,
+        ca3: true,
         exam: true,
         total: true,
         grade: true,
@@ -263,7 +269,30 @@ export const resultService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const operations = results.map(result =>
+    // Recompute grade server-side using the grading scale assigned to the
+    // result's class (Academic Setup), falling back to school-wide scales.
+    const armIds = [...new Set(results.map(r => r.armId))];
+    const arms = await prisma.arm.findMany({
+      where: { id: { in: armIds } },
+      select: { id: true, classId: true },
+    });
+    const classIdByArm = new Map(arms.map(a => [a.id, a.classId]));
+
+    // Pre-compute grades (unique arm->class pairs cached per call)
+    const gradeCache = new Map<string, string>();
+    const grades: string[] = [];
+    for (const result of results) {
+      const classId = classIdByArm.get(result.armId) ?? null;
+      const key = `${classId ?? ''}:${result.total}`;
+      let grade = gradeCache.get(key);
+      if (!grade) {
+        grade = await computeGrade(result.total, classId);
+        gradeCache.set(key, grade);
+      }
+      grades.push(grade);
+    }
+
+    const operations = results.map((result, i) =>
       prisma.result.upsert({
         where: {
           studentId_subjectId_armId_term_academicYearId: {
@@ -276,15 +305,22 @@ export const resultService = {
         },
         update: {
           ca: result.ca,
+          ca1: result.ca1 ?? undefined,
+          ca2: result.ca2 ?? undefined,
+          ca3: result.ca3 ?? undefined,
           exam: result.exam,
           total: result.total,
-          grade: result.grade,
+          grade: grades[i],
           score: result.total,
           academicYearId: result.academicYearId,
         },
         create: {
           ...result,
+          ca1: result.ca1 ?? 0,
+          ca2: result.ca2 ?? 0,
+          ca3: result.ca3 ?? 0,
           score: result.total,
+          grade: grades[i],
           schoolId: tenantId,
         },
       })
@@ -346,7 +382,7 @@ export const resultService = {
     if (attempts.length === 0) throw new Error('No attempts found for this test');
 
     // 4. Fetch existing results for this arm/subject/term/year so CA scores
-    //    can be merged (First CA + Second CA) instead of overwritten.
+    //    can be merged (First + Second + Third CA) instead of overwritten.
     const existingResults = await prisma.result.findMany({
       where: {
         armId: test.armId,
@@ -354,7 +390,7 @@ export const resultService = {
         term: data.term,
         academicYearId: data.academicYearId,
       },
-      select: { studentId: true, ca: true, exam: true },
+      select: { studentId: true, ca: true, ca1: true, ca2: true, ca3: true, exam: true },
     });
     const existingByStudent = new Map(existingResults.map(r => [r.studentId, r]));
 
@@ -372,17 +408,40 @@ export const resultService = {
       const existing = existingByStudent.get(attempt.studentId);
 
       let ca: number;
+      let ca1: number;
+      let ca2: number;
+      let ca3: number;
       let exam: number;
       if (data.resultType === 'exam') {
         exam = score;
-        ca = existing?.ca ?? 0;
+        ca1 = existing?.ca1 ?? 0;
+        ca2 = existing?.ca2 ?? 0;
+        ca3 = existing?.ca3 ?? 0;
+        ca = ca1 + ca2 + ca3;
       } else if (data.resultType === 'ca1') {
-        ca = Math.min(score, caAllocation);
+        ca1 = Math.min(score, Math.ceil(caAllocation / 3));
+        ca2 = existing?.ca2 ?? 0;
+        ca3 = existing?.ca3 ?? 0;
+        ca = ca1 + ca2 + ca3;
+        exam = existing?.exam ?? 0;
+      } else if (data.resultType === 'ca2') {
+        ca1 = existing?.ca1 ?? 0;
+        ca2 = Math.min(score, Math.ceil(caAllocation / 3));
+        ca3 = existing?.ca3 ?? 0;
+        ca = ca1 + ca2 + ca3;
+        exam = existing?.exam ?? 0;
+      } else if (data.resultType === 'ca3') {
+        ca1 = existing?.ca1 ?? 0;
+        ca2 = existing?.ca2 ?? 0;
+        ca3 = Math.min(score, Math.ceil(caAllocation / 3));
+        ca = ca1 + ca2 + ca3;
         exam = existing?.exam ?? 0;
       } else {
-        // 'ca2' (and legacy 'ca'): merge First + Second CA, capped at allocation
-        const firstCa = existing?.ca ?? 0;
-        ca = Math.min(firstCa + score, caAllocation);
+        // legacy 'ca': write straight into the CA total
+        ca = Math.min(score, caAllocation);
+        ca1 = existing?.ca1 ?? 0;
+        ca2 = existing?.ca2 ?? 0;
+        ca3 = existing?.ca3 ?? 0;
         exam = existing?.exam ?? 0;
       }
 
@@ -392,6 +451,9 @@ export const resultService = {
         armId: test.armId,
         term: data.term,
         ca,
+        ca1,
+        ca2,
+        ca3,
         exam,
         total: ca + exam,
         score,
@@ -416,6 +478,9 @@ export const resultService = {
           },
           update: {
             ca: result.ca,
+            ca1: result.ca1,
+            ca2: result.ca2,
+            ca3: result.ca3,
             exam: result.exam,
             total: result.total,
             score: result.score,
@@ -427,6 +492,9 @@ export const resultService = {
             armId: result.armId,
             term: result.term,
             ca: result.ca,
+            ca1: result.ca1,
+            ca2: result.ca2,
+            ca3: result.ca3,
             exam: result.exam,
             total: result.total,
             score: result.score,

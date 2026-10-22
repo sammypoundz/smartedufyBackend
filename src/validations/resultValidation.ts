@@ -6,7 +6,10 @@ export const createResultSchema = z.object({
   subjectId: z.string(),
   armId: z.string().optional(),        // required for new format
   term: z.string(),
-  // New fields (ca + exam)
+  // New fields (3 CAs + exam). 'ca' is the total of ca1+ca2+ca3.
+  ca1: z.number().min(0).max(100).optional(),
+  ca2: z.number().min(0).max(100).optional(),
+  ca3: z.number().min(0).max(100).optional(),
   ca: z.number().min(0).max(100).optional(),
   exam: z.number().min(0).max(100).optional(),
   // Old field (score) – still accepted
@@ -24,6 +27,9 @@ export const createResultSchema = z.object({
 
 // Schema for updating a result (partial)
 export const updateResultSchema = z.object({
+  ca1: z.number().min(0).max(100).optional(),
+  ca2: z.number().min(0).max(100).optional(),
+  ca3: z.number().min(0).max(100).optional(),
   ca: z.number().min(0).max(100).optional(),
   exam: z.number().min(0).max(100).optional(),
   total: z.number().min(0).max(100).optional(),
@@ -39,6 +45,9 @@ export const bulkResultSchema = z.object({
     subjectId: z.string(),
     armId: z.string(),
     term: z.string(),
+    ca1: z.number().min(0).max(100).optional(),
+    ca2: z.number().min(0).max(100).optional(),
+    ca3: z.number().min(0).max(100).optional(),
     ca: z.number().min(0).max(100),
     exam: z.number().min(0).max(100),
     total: z.number().min(0).max(100), // ca + exam

@@ -462,7 +462,10 @@ model Result {
   subjectId      String   @db.ObjectId
   armId          String   @db.ObjectId
   term           String
-  ca             Int
+  ca             Int // total CA = ca1 + ca2 + ca3 (kept for broadsheet/report compatibility)
+  ca1            Int    @default(0) // First CA
+  ca2            Int    @default(0) // Second CA
+  ca3            Int    @default(0) // Third CA
   exam           Int
   total          Int
   score          Int

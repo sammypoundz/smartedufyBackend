@@ -9,7 +9,7 @@ const pushTestAttemptsSchema = z.object({
   testId: z.string(),
   academicYearId: z.string(),
   term: z.string(),
-  resultType: z.enum(['ca1', 'ca2', 'ca', 'exam']),
+  resultType: z.enum(['ca1', 'ca2', 'ca3', 'ca', 'exam']),
 });
 
 export const resultController = {
