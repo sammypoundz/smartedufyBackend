@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { feeService } from '../services/feeService';
-import { createFeeStructureSchema, updateFeeStructureSchema, recordPaymentSchema, sendMessageSchema } from '../validations/feeValidation';
+import { createFeeStructureSchema, updateFeeStructureSchema, recordPaymentSchema, updatePaymentSchema, sendMessageSchema } from '../validations/feeValidation';
 import { getStringParam } from '../utils/paramUtils';
 
 export const feeController = {
@@ -83,6 +83,32 @@ export const feeController = {
       if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
       console.error(err);
       res.status(500).json({ error: err.message || 'Failed to record payment' });
+    }
+  },
+
+  updatePayment: async (req: Request, res: Response) => {
+    const id = getStringParam(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    try {
+      const data = updatePaymentSchema.parse(req.body);
+      const payment = await feeService.updatePayment(id, data);
+      res.json(payment);
+    } catch (err: any) {
+      if (err.name === 'ZodError') return res.status(400).json({ error: err.errors });
+      console.error(err);
+      res.status(500).json({ error: err.message || 'Failed to update payment' });
+    }
+  },
+
+  deletePayment: async (req: Request, res: Response) => {
+    const id = getStringParam(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    try {
+      const result = await feeService.deletePayment(id);
+      res.json(result);
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: err.message || 'Failed to delete payment' });
     }
   },
 

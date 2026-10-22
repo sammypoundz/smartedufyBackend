@@ -29,6 +29,17 @@ export const recordPaymentSchema = z.object({
   })).min(1),
 });
 
+// Edit an existing payment (corrections / mistakes)
+export const updatePaymentSchema = z.object({
+  amountPaid: z.number().positive(),
+  paymentMethod: z.enum(['cash', 'bank_transfer', 'card', 'cheque']),
+  reference: z.string().optional(),
+  breakdownItems: z.array(z.object({
+    itemName: z.string(),
+    amount: z.number().positive(),
+  })).min(1),
+});
+
 // Message sending
 export const sendMessageSchema = z.object({
   studentId: z.string().min(1),

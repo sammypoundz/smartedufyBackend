@@ -14,6 +14,8 @@ router.delete('/structures/:id', authMiddleware, privilegeGuard('fees'), feeCont
 // Payments
 router.get('/payments', authMiddleware, feeController.getAllPayments);
 router.post('/payments', authMiddleware, privilegeGuard('fees'), feeController.recordPayment);
+router.put('/payments/:id', authMiddleware, privilegeGuard('fees'), feeController.updatePayment);
+router.delete('/payments/:id', authMiddleware, privilegeGuard('fees'), feeController.deletePayment);
 
 // Student assigned fees (NEW)
 router.get('/students/:studentId/assigned-fees', authMiddleware, feeController.getStudentAssignedFees);

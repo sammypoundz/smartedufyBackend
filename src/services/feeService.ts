@@ -332,6 +332,89 @@ export const feeService = {
     return payment;
   },
 
+  /** Recompute StudentFee amountPaid/status from its itemised FeePayment rows. */
+  recalcStudentFee: async (studentId: string, feeStructureId: string, tenantId: string) => {
+    const studentFee = await prisma.studentFee.findUnique({
+      where: {
+        studentId_feeStructureId: { studentId, feeStructureId },
+      },
+    });
+    if (!studentFee) return null;
+
+    const payments = await prisma.feePayment.findMany({
+      where: { studentId, feeStructureId, schoolId: tenantId },
+    });
+
+    const totalPaid = payments.reduce((sum, p) => sum + (p.amountPaid || 0), 0);
+    let status: 'PENDING' | 'PARTIAL' | 'PAID' = 'PARTIAL';
+    if (totalPaid >= studentFee.amountAssigned && totalPaid > 0) status = 'PAID';
+    else if (totalPaid === 0) status = 'PENDING';
+
+    return prisma.studentFee.update({
+      where: { id: studentFee.id, schoolId: tenantId },
+      data: { amountPaid: totalPaid, status },
+    });
+  },
+
+  updatePayment: async (
+    paymentId: string,
+    data: {
+      amountPaid: number;
+      paymentMethod: string;
+      reference?: string;
+      breakdownItems: PaymentBreakdownItem[];
+    }
+  ) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    const payment = await prisma.feePayment.findUnique({
+      where: { id: paymentId, schoolId: tenantId },
+    });
+    if (!payment) throw new Error('Payment not found');
+
+    const totalFromItems = data.breakdownItems.reduce((sum, i) => sum + i.amount, 0);
+    if (totalFromItems !== data.amountPaid) {
+      throw new Error('Sum of breakdown items must equal total amount paid');
+    }
+
+    const updated = await prisma.feePayment.update({
+      where: { id: paymentId, schoolId: tenantId },
+      data: {
+        amountPaid: data.amountPaid,
+        paymentMethod: data.paymentMethod,
+        reference: data.reference || null,
+        breakdownItems: data.breakdownItems as Prisma.JsonArray,
+      },
+      include: {
+        student: { select: { name: true, admissionNumber: true } },
+        feeStructure: true,
+      },
+    });
+
+    await feeService.recalcStudentFee(payment.studentId, payment.feeStructureId, tenantId);
+
+    return updated;
+  },
+
+  deletePayment: async (paymentId: string) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    const payment = await prisma.feePayment.findUnique({
+      where: { id: paymentId, schoolId: tenantId },
+    });
+    if (!payment) throw new Error('Payment not found');
+
+    await prisma.feePayment.delete({
+      where: { id: paymentId, schoolId: tenantId },
+    });
+
+    await feeService.recalcStudentFee(payment.studentId, payment.feeStructureId, tenantId);
+
+    return { message: 'Payment removed' };
+  },
+
   // ---------- Messaging (real implementation) ----------
   sendMessage: async (
     studentId: string,
