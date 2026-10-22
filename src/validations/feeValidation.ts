@@ -29,14 +29,16 @@ export const recordPaymentSchema = z.object({
   })).min(1),
 });
 
-// Edit an existing payment (corrections / mistakes)
+// Edit an existing payment (corrections / mistakes).
+// Items may have amount 0 — that means the fee item is unmarked as paid.
+// If ALL items are 0 the whole payment is removed (fully unmarked).
 export const updatePaymentSchema = z.object({
-  amountPaid: z.number().positive(),
+  amountPaid: z.number().min(0),
   paymentMethod: z.enum(['cash', 'bank_transfer', 'card', 'cheque']),
   reference: z.string().optional(),
   breakdownItems: z.array(z.object({
     itemName: z.string(),
-    amount: z.number().positive(),
+    amount: z.number().min(0),
   })).min(1),
 });
 

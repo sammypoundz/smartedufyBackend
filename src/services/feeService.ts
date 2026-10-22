@@ -378,6 +378,16 @@ export const feeService = {
       throw new Error('Sum of breakdown items must equal total amount paid');
     }
 
+    // If every item was unmarked (amount 0), remove the payment entirely
+    // and recalculate the student's outstanding balance.
+    if (totalFromItems === 0) {
+      await prisma.feePayment.delete({
+        where: { id: paymentId, schoolId: tenantId },
+      });
+      await feeService.recalcStudentFee(payment.studentId, payment.feeStructureId, tenantId);
+      return { message: 'Payment fully unmarked and removed' };
+    }
+
     const updated = await prisma.feePayment.update({
       where: { id: paymentId, schoolId: tenantId },
       data: {
