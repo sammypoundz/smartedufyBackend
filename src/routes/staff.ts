@@ -12,6 +12,12 @@ const upload = multer({ dest: 'uploads/' });
 router.use(authMiddleware);
 router.use(privilegeGuard('staff', 'teachers'));
 
+// Expose the tenant id on the request for role resolution in the controller.
+router.use((req: any, _res, next) => {
+  req.schoolId = req.user?.schoolId;
+  next();
+});
+
 router.get('/', staffController.getAll);
 router.get('/:id', staffController.getById);
 router.post('/', staffController.create);

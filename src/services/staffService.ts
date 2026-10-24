@@ -71,17 +71,40 @@ export const staffService = {
   getAllStaff: async () => {
     const STAFF_ROLES: Role[] = ['ADMIN', 'TEACHER', 'PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN'];
     // Multi-role aware: include users whose primary role OR any secondary
-    // role (in `roles`) is a staff role.
+    // role (in `roles`) is a staff role — including custom roles created on
+    // the Roles & Privileges page (they are neither parents nor students).
     const users = await prisma.user.findMany({
       where: {
-        OR: [
-          { role: { in: STAFF_ROLES } },
-          { roles: { hasSome: STAFF_ROLES as any } },
+        AND: [
+          { role: { notIn: ['PARENT', 'STUDENT'] } },
+          {
+            OR: [
+              { role: { in: STAFF_ROLES } },
+              { roles: { hasSome: STAFF_ROLES as any } },
+              // Custom-role-only users: they hold at least one role that is
+              // not a system role (parent/student were excluded above).
+              // Prisma has no NOT-hasSome on scalars, so fetch everyone with
+              // a roles array and filter custom-role-only users in memory.
+              {
+                roles: { isEmpty: false },
+              },
+            ],
+          },
         ],
       },
       orderBy: { createdAt: 'desc' },
     });
-    return Promise.all(users.map(buildStaffResponse));
+    // Drop users whose roles contain ONLY system roles not in STAFF_ROLES
+    // (e.g. PARENT/STUDENT as secondary roles) — they are not staff.
+    const ALL_SYSTEM: string[] = ['ADMIN', 'TEACHER', 'PRINCIPAL', 'VICE_PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN', 'PARENT', 'STUDENT'];
+    const filtered = users.filter((u) => {
+      const held = [...(u.roles || []), u.role].filter(Boolean);
+      const staffRoles = held.filter((r) => (STAFF_ROLES as string[]).includes(r));
+      if (staffRoles.length) return true;
+      // No staff system role: keep only if they hold a custom (non-system) role.
+      return held.some((r) => !ALL_SYSTEM.includes(r));
+    });
+    return Promise.all(filtered.map(buildStaffResponse));
   },
 
   getStaffById: async (id: string) => {
@@ -99,6 +122,8 @@ export const staffService = {
     name: string;
     email: string;
     role: Role;
+    /** Explicit roles array (used when the primary role is a custom role). */
+    roles?: string[];
     extraRoles?: string[];
     hashedPassword: string;
     teacherType?: string;
@@ -108,11 +133,14 @@ export const staffService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const { name, email, role, extraRoles, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
+    const { name, email, role, roles: explicitRoles, extraRoles, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
     // Dual-role support: secondary roles chosen in the staff form (e.g. an
     // Accountant who also teaches) are stored in User.roles so privilege
     // resolution, the Teachers page and teacher functions all see them.
-    const roles = Array.from(new Set([...(extraRoles || []), role]));
+    // When `roles` is provided explicitly (custom primary role), use it.
+    const roles = explicitRoles
+      ? Array.from(new Set([...explicitRoles, role]))
+      : Array.from(new Set([...(extraRoles || []), role]));
     const isTeacher = roles.includes('TEACHER');
 
     // Create the user and any role-specific records atomically
@@ -183,6 +211,8 @@ export const staffService = {
     name?: string;
     email?: string;
     role?: Role;
+    /** Explicit full roles array (used when a custom role is involved). */
+    roles?: string[];
     extraRoles?: string[];
     teacherType?: string;
     assignedClass?: string;
@@ -191,7 +221,7 @@ export const staffService = {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const { name, email, role, extraRoles, teacherType, assignedClass, assignedSubjects } = data;
+    const { name, email, role, roles: explicitRoles, extraRoles, teacherType, assignedClass, assignedSubjects } = data;
 
     const user = await prisma.user.findUnique({
       where: { id, schoolId: tenantId },
@@ -206,7 +236,10 @@ export const staffService = {
     // the staff form. When provided, rebuild the full roles array (always
     // including the effective primary role) so editing a user keeps every
     // role they hold.
-    if (extraRoles !== undefined) {
+    if (explicitRoles !== undefined) {
+      // Explicit roles array (custom-role aware) wins when provided.
+      userUpdateData.roles = Array.from(new Set([...explicitRoles, ...(role !== undefined ? [role] : [])]));
+    } else if (extraRoles !== undefined) {
       const primary = role !== undefined ? role : user.role;
       userUpdateData.roles = Array.from(new Set([...(extraRoles || []), primary]));
     }
