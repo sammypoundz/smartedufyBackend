@@ -24,6 +24,8 @@ const SUBDOMAIN = 'demo-test';
 const ADMIN_EMAIL = 'admin@demo.school';
 const ADMIN_PASSWORD = 'demo1234';
 const STUDENT_PASSWORD = 'demo1234';
+const TEACHER_PASSWORD = 'demo1234';
+const PARENT_PASSWORD = 'demo1234';
 
 const CLASSES = [
   { name: 'JSS 1', arms: ['A', 'B'] },
@@ -145,10 +147,149 @@ async function main() {
   }
   console.log(`✅ Demo students: ${created} created, ${skipped} skipped (already present)`);
 
+  // ---------- Demo teachers (one per arm, as form teacher + subject teacher) ----------
+  const subjectRows = await prisma.subject.findMany({ where: { schoolId } });
+  let teacherIndex = 0;
+  for (const key of Object.keys(armByKey)) {
+    const [className, letter] = key.split('|');
+    teacherIndex++;
+    const teacherEmail = `teacher${teacherIndex}@demo.school`;
+    const existingTeacherUser = await prisma.user.findUnique({ where: { email: teacherEmail } });
+    let teacherRow: { id: string } | null = null;
+    if (existingTeacherUser) {
+      teacherRow = await prisma.teacher.findUnique({ where: { userId: existingTeacherUser.id } });
+    } else {
+      const teacherName = `Mr. ${LAST_NAMES[(teacherIndex * 2) % LAST_NAMES.length]}`;
+      const teacherUser = await prisma.user.create({
+        data: {
+          name: teacherName,
+          email: teacherEmail,
+          password: await bcrypt.hash(TEACHER_PASSWORD, 10),
+          role: 'TEACHER',
+          roles: ['TEACHER'],
+          isActive: true,
+          schoolId,
+        },
+      });
+      teacherRow = await prisma.teacher.create({
+        data: {
+          name: teacherName,
+          email: teacherEmail,
+          gender: teacherIndex % 2 === 0 ? 'FEMALE' : 'MALE',
+          teacherType: 'BOTH',
+          registrationStatus: 'APPROVED',
+          userId: teacherUser.id,
+          schoolId,
+        },
+      });
+    }
+    if (!teacherRow) continue;
+
+    const armId = armByKey[key];
+    // Link teacher as form teacher of the arm
+    await prisma.arm.update({ where: { id: armId }, data: { teacherId: teacherRow.id } });
+
+    // Teach the first two subjects in this arm
+    const armSubjects = subjectRows.slice(0, 2);
+    for (const subject of armSubjects) {
+      await prisma.subjectTeacher.upsert({
+        where: { schoolId_subjectId_teacherId: { schoolId, subjectId: subject.id, teacherId: teacherRow.id } },
+        update: {},
+        create: { schoolId, subjectId: subject.id, teacherId: teacherRow.id },
+      });
+      await prisma.subjectArm.upsert({
+        where: { schoolId_subjectId_armId: { schoolId, subjectId: subject.id, armId } },
+        update: { teacherId: teacherRow.id },
+        create: { schoolId, subjectId: subject.id, armId, teacherId: teacherRow.id },
+      });
+      await prisma.teacherSubjectAssignment.upsert({
+        where: { schoolId_subjectId_armId: { schoolId, subjectId: subject.id, armId } },
+        update: {},
+        create: {
+          schoolId,
+          subjectId: subject.id,
+          armId,
+          teacherId: teacherRow.id,
+          periodsPerWeek: 2,
+          allowedDays: ['Monday', 'Wednesday'],
+        },
+      });
+    }
+    console.log(`✅ Teacher ready: ${teacherEmail} — form teacher of ${className} ${letter}`);
+  }
+
+  // ---------- Demo parents (one parent account per student's family group) ----------
+  // Give the first two students of each arm a shared parent, so the parent
+  // login demonstrates a multi-child (cross-class) link.
+  const demoStudents = await prisma.student.findMany({
+    where: { schoolId },
+    include: { arm: { include: { class: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  let parentIndex = 0;
+  for (const key of Object.keys(armByKey)) {
+    const [className, letter] = key.split('|');
+    const armId = armByKey[key];
+    const armStudents = demoStudents.filter((s) => s.armId === armId);
+    if (armStudents.length < 2) continue;
+
+    parentIndex++;
+    const parentEmail = `parent${parentIndex}@demo.school`;
+    const parentName = `Mrs. ${LAST_NAMES[(parentIndex * 4) % LAST_NAMES.length]}`;
+
+    let parentUser = await prisma.user.findUnique({ where: { email: parentEmail } });
+    if (!parentUser) {
+      parentUser = await prisma.user.create({
+        data: {
+          name: parentName,
+          email: parentEmail,
+          password: await bcrypt.hash(PARENT_PASSWORD, 10),
+          role: 'PARENT',
+          roles: ['PARENT'],
+          isActive: true,
+          schoolId,
+        },
+      });
+    }
+    let parentRow = await prisma.parent.findUnique({ where: { userId: parentUser.id } });
+    if (!parentRow) {
+      parentRow = await prisma.parent.create({
+        data: { name: parentName, email: parentEmail, userId: parentUser.id, schoolId },
+      });
+    }
+
+    // Link first two students of the arm to this parent
+    for (const student of armStudents.slice(0, 2)) {
+      await prisma.student.update({
+        where: { id: student.id },
+        data: { parentId: parentRow.id, guardianRelationship: 'mother' },
+      });
+      // Pre-approve the link request so the parent dashboard works out of the box
+      const existingLink = await prisma.parentStudentLink.findFirst({
+        where: { parentId: parentRow.id, studentId: student.id },
+      });
+      if (!existingLink) {
+        await prisma.parentStudentLink.create({
+          data: {
+            schoolId,
+            parentId: parentRow.id,
+            studentId: student.id,
+            status: 'APPROVED',
+            requestedName: student.name,
+          },
+        });
+      }
+    }
+    const childNames = armStudents.slice(0, 2).map((s) => s.name).join(', ');
+    console.log(`✅ Parent ready: ${parentEmail} — children: ${childNames} (${className} ${letter})`);
+  }
+
   console.log('\n────────────────────────────────────────────');
   console.log(`School ID (tenant): ${schoolId}`);
   console.log(`Login (web):        ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
   console.log('Student logins:     admission number + arm (password: demo1234)');
+  console.log('Teacher logins:     teacher1@demo.school ... (password: demo1234)');
+  console.log('Parent logins:      parent1@demo.school ... (password: demo1234)');
   console.log('────────────────────────────────────────────');
   console.log('\n⚠️  This is a SEPARATE tenant — live school data is untouched.');
 }
