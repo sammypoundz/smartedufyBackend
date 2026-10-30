@@ -9,6 +9,7 @@ import { runWithTenant } from '../utils/tenantContext';
 import { resolvePrivileges } from './roles';
 import { logActivity } from '../services/auditService';
 import { idGeneratorService } from '../services/idGeneratorService';
+import { ensureSystemRoles } from './roles';
 
 const router = Router();
 
@@ -53,9 +54,23 @@ router.post('/register-school', async (req, res, next) => {
 
     const hashedPassword = await bcrypt.hash(data.password, 10);
 
+    // Derive a unique subdomain slug from the school name (the column is
+    // globally unique, and Mongo treats nulls as duplicates too).
+    const baseSlug = data.schoolName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'school';
+    let subdomain = baseSlug;
+    for (let i = 2; i < 100; i++) {
+      const taken = await prisma.school.findUnique({ where: { subdomain } });
+      if (!taken) break;
+      subdomain = `${baseSlug}-${i}`;
+    }
+
     // Create the school tenant first, then the admin user inside its tenant
     // context so the ID generator can assign an ADMIN code.
-    const school = await prisma.school.create({ data: { name: data.schoolName } });
+    const school = await prisma.school.create({ data: { name: data.schoolName, subdomain } });
 
     let admin;
     try {
@@ -74,18 +89,15 @@ router.post('/register-school', async (req, res, next) => {
               userIdCode,
             },
           });
-          // MongoDB connector: no createMany – create the default system
-          // roles one by one.
-          for (const name of ['ADMIN', 'TEACHER', 'STUDENT', 'PARENT']) {
-            await tx.roleDef.upsert({
-              where: { schoolId_name: { schoolId: school.id, name } },
-              update: {},
-              create: { schoolId: school.id, name, isSystem: true },
-            });
-          }
           return createdAdmin;
         });
       });
+      // Seed ALL default system roles with their real privilege sets
+      // (ADMIN gets every page, TEACHER/STUDENT/PARENT get theirs). Without
+      // this the admin logs in with zero privileges and the app bounces
+      // them straight back to /login. ensureSystemRoles is idempotent and
+      // is the same seeder the roles page uses.
+      await ensureSystemRoles(school.id);
     } catch (err) {
       // Roll the new school back so a half-created tenant isn't left behind
       await prisma.school.delete({ where: { id: school.id } }).catch(() => {});
