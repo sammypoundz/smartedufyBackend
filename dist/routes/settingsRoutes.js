@@ -32,16 +32,25 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const settingsController_1 = require("../controllers/settingsController");
 const auth_1 = require("../middleware/auth");
 const roleGuard_1 = require("../middleware/roleGuard");
+const multer_1 = __importDefault(require("multer"));
+const logoUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+});
 const router = (0, express_1.Router)();
 router.use(auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('settings'));
 // General
 router.get('/general', settingsController_1.settingsController.getGeneral);
 router.put('/general', (0, roleGuard_1.roleGuard)(['ADMIN']), settingsController_1.settingsController.updateGeneral);
+router.put('/logo', (0, roleGuard_1.roleGuard)(['ADMIN']), logoUpload.single('logo'), settingsController_1.settingsController.uploadLogo);
 // Academic
 router.get('/academic', settingsController_1.settingsController.getAcademic);
 router.put('/academic', (0, roleGuard_1.roleGuard)(['ADMIN']), settingsController_1.settingsController.updateAcademic);

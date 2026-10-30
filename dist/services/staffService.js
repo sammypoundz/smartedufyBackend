@@ -9,8 +9,11 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const tenantContext_1 = require("../utils/tenantContext");
 // ---------- Helper: build staff response ----------
 const buildStaffResponse = async (user) => {
+    // Multi-role aware: a user may hold TEACHER as a secondary role
+    // (e.g. roles = [ACCOUNTANT, TEACHER]), not just as the primary role.
+    const heldRoles = Array.from(new Set([...(user.roles || []), user.role])).filter(Boolean);
     let teacherData = null;
-    if (user.role === 'TEACHER') {
+    if (heldRoles.includes('TEACHER')) {
         teacherData = await db_1.default.teacher.findUnique({
             where: { userId: user.id },
             include: {
@@ -24,10 +27,11 @@ const buildStaffResponse = async (user) => {
         name: user.name || '',
         email: user.email,
         role: user.role,
+        roles: heldRoles,
         isActive: user.isActive,
         createdAt: user.createdAt,
     };
-    if (user.role === 'TEACHER' && teacherData) {
+    if (heldRoles.includes('TEACHER') && teacherData) {
         const arms = teacherData.arms || [];
         const subjectArms = teacherData.subjectArms || [];
         staff.teacherType = arms.length > 0 ? 'class_teacher' :
@@ -68,11 +72,42 @@ exports.staffService = {
     // Get all staff (users with staff roles) – middleware adds schoolId
     getAllStaff: async () => {
         const STAFF_ROLES = ['ADMIN', 'TEACHER', 'PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN'];
+        // Multi-role aware: include users whose primary role OR any secondary
+        // role (in `roles`) is a staff role — including custom roles created on
+        // the Roles & Privileges page (they are neither parents nor students).
         const users = await db_1.default.user.findMany({
-            where: { role: { in: STAFF_ROLES } },
+            where: {
+                AND: [
+                    { role: { notIn: ['PARENT', 'STUDENT'] } },
+                    {
+                        OR: [
+                            { role: { in: STAFF_ROLES } },
+                            { roles: { hasSome: STAFF_ROLES } },
+                            // Custom-role-only users: they hold at least one role that is
+                            // not a system role (parent/student were excluded above).
+                            // Prisma has no NOT-hasSome on scalars, so fetch everyone with
+                            // a roles array and filter custom-role-only users in memory.
+                            {
+                                roles: { isEmpty: false },
+                            },
+                        ],
+                    },
+                ],
+            },
             orderBy: { createdAt: 'desc' },
         });
-        return Promise.all(users.map(exports.buildStaffResponse));
+        // Drop users whose roles contain ONLY system roles not in STAFF_ROLES
+        // (e.g. PARENT/STUDENT as secondary roles) — they are not staff.
+        const ALL_SYSTEM = ['ADMIN', 'TEACHER', 'PRINCIPAL', 'VICE_PRINCIPAL', 'BURSAR', 'ACCOUNTANT', 'LIBRARIAN', 'PARENT', 'STUDENT'];
+        const filtered = users.filter((u) => {
+            const held = [...(u.roles || []), u.role].filter(Boolean);
+            const staffRoles = held.filter((r) => STAFF_ROLES.includes(r));
+            if (staffRoles.length)
+                return true;
+            // No staff system role: keep only if they hold a custom (non-system) role.
+            return held.some((r) => !ALL_SYSTEM.includes(r));
+        });
+        return Promise.all(filtered.map(exports.buildStaffResponse));
     },
     getStaffById: async (id) => {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
@@ -89,7 +124,15 @@ exports.staffService = {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        const { name, email, role, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
+        const { name, email, role, roles: explicitRoles, extraRoles, hashedPassword, teacherType, assignedClass, assignedSubjects } = data;
+        // Dual-role support: secondary roles chosen in the staff form (e.g. an
+        // Accountant who also teaches) are stored in User.roles so privilege
+        // resolution, the Teachers page and teacher functions all see them.
+        // When `roles` is provided explicitly (custom primary role), use it.
+        const roles = explicitRoles
+            ? Array.from(new Set([...explicitRoles, role]))
+            : Array.from(new Set([...(extraRoles || []), role]));
+        const isTeacher = roles.includes('TEACHER');
         // Create the user and any role-specific records atomically
         const user = await db_1.default.$transaction(async (tx) => {
             const createdUser = await tx.user.create({
@@ -98,11 +141,12 @@ exports.staffService = {
                     email,
                     password: hashedPassword,
                     role,
+                    roles,
                     isActive: true,
                     schoolId: tenantId,
                 },
             });
-            if (role === 'TEACHER') {
+            if (isTeacher) {
                 const teacher = await tx.teacher.create({
                     data: {
                         name: name || '',
@@ -151,7 +195,7 @@ exports.staffService = {
         const tenantId = (0, tenantContext_1.getCurrentTenantId)();
         if (!tenantId)
             throw new Error('Tenant context missing');
-        const { name, email, role, teacherType, assignedClass, assignedSubjects } = data;
+        const { name, email, role, roles: explicitRoles, extraRoles, teacherType, assignedClass, assignedSubjects } = data;
         const user = await db_1.default.user.findUnique({
             where: { id, schoolId: tenantId },
         });
@@ -164,12 +208,25 @@ exports.staffService = {
             userUpdateData.email = email;
         if (role !== undefined)
             userUpdateData.role = role;
+        // Dual-role support: `extraRoles` carries the secondary roles chosen in
+        // the staff form. When provided, rebuild the full roles array (always
+        // including the effective primary role) so editing a user keeps every
+        // role they hold.
+        if (explicitRoles !== undefined) {
+            // Explicit roles array (custom-role aware) wins when provided.
+            userUpdateData.roles = Array.from(new Set([...explicitRoles, ...(role !== undefined ? [role] : [])]));
+        }
+        else if (extraRoles !== undefined) {
+            const primary = role !== undefined ? role : user.role;
+            userUpdateData.roles = Array.from(new Set([...(extraRoles || []), primary]));
+        }
         const updatedUser = await db_1.default.user.update({
             where: { id, schoolId: tenantId },
             data: userUpdateData,
         });
-        // Handle teacher sync
-        if (role === 'TEACHER') {
+        // Handle teacher sync — TEACHER may be primary or a secondary role.
+        const effectiveRoles = Array.from(new Set([...(userUpdateData.roles || []), userUpdateData.role || user.role])).filter(Boolean);
+        if (effectiveRoles.includes('TEACHER')) {
             let teacher = await db_1.default.teacher.findUnique({
                 where: { userId: id, schoolId: tenantId },
             });
@@ -238,15 +295,21 @@ exports.staffService = {
                 }
             }
         }
-        else {
-            // If role changed from TEACHER, delete teacher record (tenant-scoped)
-            const teacher = await db_1.default.teacher.findUnique({
-                where: { userId: id, schoolId: tenantId },
-            });
-            if (teacher) {
-                await db_1.default.teacher.delete({
-                    where: { id: teacher.id, schoolId: tenantId },
+        else if (role !== undefined) {
+            // Only remove the Teacher profile when the primary role was EXPLICITLY
+            // changed away from TEACHER. The else-branch used to run on every
+            // update (even a simple name edit of a non-teacher), silently deleting
+            // the Teacher profile of dual-role users (e.g. ACCOUNTANT + TEACHER).
+            const heldRoles = Array.from(new Set([...(updatedUser.roles || []), updatedUser.role])).filter(Boolean);
+            if (!heldRoles.includes('TEACHER')) {
+                const teacher = await db_1.default.teacher.findUnique({
+                    where: { userId: id, schoolId: tenantId },
                 });
+                if (teacher) {
+                    await db_1.default.teacher.delete({
+                        where: { id: teacher.id, schoolId: tenantId },
+                    });
+                }
             }
         }
         return (0, exports.buildStaffResponse)(updatedUser);

@@ -41,7 +41,7 @@ router.get("/mine", async (req, res, next) => {
     }
 });
 // POST /api/question-docs — teacher uploads a question document (multipart)
-router.post("/", (0, roleGuard_1.roleGuard)(["ADMIN", "TEACHER", "PRINCIPAL", "VICE_PRINCIPAL"]), upload_1.uploadQuestionDoc.single("file"), async (req, res, next) => {
+router.post("/", (0, roleGuard_1.privilegeGuard)("cbt"), upload_1.uploadQuestionDoc.single("file"), async (req, res, next) => {
     try {
         const file = req.file;
         if (!file)
@@ -75,7 +75,7 @@ router.post("/", (0, roleGuard_1.roleGuard)(["ADMIN", "TEACHER", "PRINCIPAL", "V
     }
 });
 // PUT /api/question-docs/:id — owner edits (only PENDING for teachers)
-router.put("/:id", (0, roleGuard_1.roleGuard)(["ADMIN", "TEACHER", "PRINCIPAL", "VICE_PRINCIPAL"]), upload_1.uploadQuestionDoc.single("file"), async (req, res, next) => {
+router.put("/:id", (0, roleGuard_1.privilegeGuard)("cbt"), upload_1.uploadQuestionDoc.single("file"), async (req, res, next) => {
     try {
         const existing = await prisma_1.prisma.questionDoc.findUnique({
             where: { id: String(req.params.id) },
@@ -187,7 +187,7 @@ router.get("/", async (req, res, next) => {
     }
 });
 // PATCH /api/question-docs/:id/review — approve or reject (admins)
-router.patch("/:id/review", (0, roleGuard_1.roleGuard)(["ADMIN", "PRINCIPAL", "VICE_PRINCIPAL"]), async (req, res, next) => {
+router.patch("/:id/review", (0, roleGuard_1.roleGuard)(["ADMIN", "PRINCIPAL", "VICE_PRINCIPAL"]), (0, roleGuard_1.privilegeGuard)("cbt"), async (req, res, next) => {
     try {
         const { decision, reviewNote } = req.body;
         const d = String(decision || "").toUpperCase();

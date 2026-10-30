@@ -14,9 +14,9 @@ router.get('/stats', inventoryController_1.inventoryController.getStats);
 // GET /api/inventory/:id – get one
 router.get('/:id', inventoryController_1.inventoryController.getById);
 // POST /api/inventory – create (admin/bursar only)
-router.post('/', (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR']), inventoryController_1.inventoryController.create);
+router.post('/', (0, roleGuard_1.privilegeGuard)('inventory'), inventoryController_1.inventoryController.create);
 // PUT /api/inventory/:id – update (admin/bursar only)
-router.put('/:id', (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR']), inventoryController_1.inventoryController.update);
+router.put('/:id', (0, roleGuard_1.privilegeGuard)('inventory'), inventoryController_1.inventoryController.update);
 // DELETE /api/inventory/:id – delete (admin/bursar only)
-router.delete('/:id', (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR']), inventoryController_1.inventoryController.delete);
+router.delete('/:id', (0, roleGuard_1.privilegeGuard)('inventory'), inventoryController_1.inventoryController.delete);
 exports.default = router;

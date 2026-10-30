@@ -13,14 +13,15 @@ router.get('/me', auth_1.authMiddleware, teacherController_1.teacherController.g
 router.patch('/me', auth_1.authMiddleware, teacherController_1.teacherController.updateMe);
 // Get a single teacher by ID
 router.get('/:id', auth_1.authMiddleware, teacherController_1.teacherController.getById);
-// Create a new teacher (admin only)
-router.post('/', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), teacherController_1.teacherController.create);
+// Teacher management is privilege-gated: holders of 'teachers' (or the
+// broader 'staff' privilege) have full CRUD — ADMIN/PRINCIPAL implicitly pass.
+router.post('/', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('teachers', 'staff'), teacherController_1.teacherController.create);
 // Update an existing teacher (admin only) – PUT for full update
-router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), teacherController_1.teacherController.update);
+router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('teachers', 'staff'), teacherController_1.teacherController.update);
 // Partial update (admin only) – for suspend/activate etc.
-router.patch('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), teacherController_1.teacherController.update);
+router.patch('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('teachers', 'staff'), teacherController_1.teacherController.update);
 // Delete a teacher (admin only)
-router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), teacherController_1.teacherController.delete);
+router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('teachers', 'staff'), teacherController_1.teacherController.delete);
 // Reset teacher password (admin only)
-router.post('/:id/reset-password', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), teacherController_1.teacherController.resetPassword);
+router.post('/:id/reset-password', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('teachers', 'staff'), teacherController_1.teacherController.resetPassword);
 exports.default = router;

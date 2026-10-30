@@ -6,6 +6,7 @@ const express_1 = require("express");
 const zod_1 = require("zod");
 const prisma_1 = require("../config/prisma");
 const auth_1 = require("../middleware/auth");
+const auth_2 = require("../middleware/auth");
 const privileges_1 = require("../utils/privileges");
 const privilegeService_1 = require("../services/privilegeService");
 const router = (0, express_1.Router)();
@@ -53,7 +54,7 @@ async function ensureSystemRoles(schoolId) {
 // backward compatibility with existing imports.)
 var privilegeService_2 = require("../services/privilegeService");
 Object.defineProperty(exports, "resolvePrivileges", { enumerable: true, get: function () { return privilegeService_2.resolvePrivileges; } });
-router.use(auth_1.authMiddleware);
+router.use(auth_1.authMiddleware, (0, auth_2.privilegeGuard)('roles'));
 // List all roles for the school (auto-creates system roles on first call).
 router.get("/", async (req, res, next) => {
     try {

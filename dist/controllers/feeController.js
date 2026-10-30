@@ -93,6 +93,35 @@ exports.feeController = {
             res.status(500).json({ error: err.message || 'Failed to record payment' });
         }
     },
+    updatePayment: async (req, res) => {
+        const id = (0, paramUtils_1.getStringParam)(req.params.id);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid id' });
+        try {
+            const data = feeValidation_1.updatePaymentSchema.parse(req.body);
+            const payment = await feeService_1.feeService.updatePayment(id, data);
+            res.json(payment);
+        }
+        catch (err) {
+            if (err.name === 'ZodError')
+                return res.status(400).json({ error: err.errors });
+            console.error(err);
+            res.status(500).json({ error: err.message || 'Failed to update payment' });
+        }
+    },
+    deletePayment: async (req, res) => {
+        const id = (0, paramUtils_1.getStringParam)(req.params.id);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid id' });
+        try {
+            const result = await feeService_1.feeService.deletePayment(id);
+            res.json(result);
+        }
+        catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message || 'Failed to delete payment' });
+        }
+    },
     // Student assigned fees (NEW)
     getStudentAssignedFees: async (req, res) => {
         const studentId = (0, paramUtils_1.getStringParam)(req.params.studentId);

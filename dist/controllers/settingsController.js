@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsController = void 0;
 const settingsService_1 = require("../services/settingsService");
+const cloudinaryService_1 = require("../services/cloudinaryService");
 const idGeneratorService_1 = require("../services/idGeneratorService");
 const settingsValidation_1 = require("../validations/settingsValidation");
 // Helper to get validated ID from params
@@ -35,6 +36,30 @@ exports.settingsController = {
                 return res.status(400).json({ error: err.errors });
             console.error(err);
             res.status(500).json({ error: 'Failed to update general settings' });
+        }
+    },
+    uploadLogo: async (req, res) => {
+        try {
+            if (!req.file || !req.file.buffer) {
+                return res.status(400).json({ error: 'No image file provided' });
+            }
+            if (!cloudinaryService_1.cloudinaryService.isConfigured()) {
+                return res.status(500).json({ error: 'Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.' });
+            }
+            const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml'];
+            if (!allowed.includes(req.file.mimetype)) {
+                return res.status(400).json({ error: 'Only PNG, JPG, WEBP or SVG images are allowed' });
+            }
+            if (req.file.size > 5 * 1024 * 1024) {
+                return res.status(400).json({ error: 'Image must be smaller than 5MB' });
+            }
+            const logoUrl = await cloudinaryService_1.cloudinaryService.uploadLogo(req.file.buffer);
+            const result = await settingsService_1.settingsService.updateLogo(logoUrl);
+            res.json({ ...result, logoUrl });
+        }
+        catch (err) {
+            console.error(err);
+            res.status(500).json({ error: 'Failed to upload logo' });
         }
     },
     // ----- Academic -----

@@ -577,6 +577,7 @@ model FeeStructure {
   schoolId    String   @db.ObjectId
   school      School   @relation(fields: [schoolId], references: [id])
   className   String
+  armName     String?
   term        String
   breakdown   Json
   totalAmount Float

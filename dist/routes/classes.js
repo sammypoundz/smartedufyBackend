@@ -26,31 +26,31 @@ router.get('/:id', auth_1.authMiddleware, classController_1.classController.getB
  * POST /api/classes
  * Create a new class (admin only)
  */
-router.post('/', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), classController_1.classController.create);
+router.post('/', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('classes'), classController_1.classController.create);
 /**
  * PUT /api/classes/:id
  * Update a class name (admin only)
  */
-router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), classController_1.classController.update);
+router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('classes'), classController_1.classController.update);
 /**
  * DELETE /api/classes/:id
  * Delete a class (admin only)
  */
-router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), classController_1.classController.delete);
+router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('classes'), classController_1.classController.delete);
 // ==================== PROTECTED ARM ROUTES ====================
 /**
  * POST /api/arms
  * Create a new arm under a class (admin only)
  */
-router.post('/arms', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), armController_1.armController.create);
+router.post('/arms', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('classes'), armController_1.armController.create);
 /**
  * PATCH /api/arms/:id
  * Update an existing arm (admin only)
  */
-router.patch('/arms/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), armController_1.armController.update);
+router.patch('/arms/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('classes'), armController_1.armController.update);
 /**
  * DELETE /api/arms/:id
  * Delete an arm (admin only)
  */
-router.delete('/arms/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN']), armController_1.armController.delete);
+router.delete('/arms/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('classes'), armController_1.armController.delete);
 exports.default = router;

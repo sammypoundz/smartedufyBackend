@@ -39,6 +39,8 @@ const inventoryRoutes_1 = __importDefault(require("./routes/inventoryRoutes"));
 const settingsRoutes_1 = __importDefault(require("./routes/settingsRoutes"));
 const auditLogs_1 = __importDefault(require("./routes/auditLogs"));
 const questionDocRoutes_1 = __importDefault(require("./routes/questionDocRoutes"));
+const offlineRoutes_1 = __importDefault(require("./routes/offlineRoutes"));
+const aiScanRoutes_1 = __importDefault(require("./routes/aiScanRoutes"));
 // Import middleware
 const errorHandler_1 = require("./middleware/errorHandler");
 const auth_2 = require("./middleware/auth");
@@ -102,6 +104,8 @@ app.use('/api/inventory', inventoryRoutes_1.default);
 app.use('/api/settings', settingsRoutes_1.default);
 app.use('/api/audit-logs', auditLogs_1.default);
 app.use('/api/question-docs', questionDocRoutes_1.default);
+app.use('/api/offline', offlineRoutes_1.default);
+app.use('/api/ai-scan', aiScanRoutes_1.default);
 const timetableWorkflowRoutes_1 = __importDefault(require("./routes/timetableWorkflowRoutes"));
 const parentLinkRoutes_1 = __importDefault(require("./routes/parentLinkRoutes"));
 app.use('/api/timetable-workflow', timetableWorkflowRoutes_1.default);

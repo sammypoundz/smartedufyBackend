@@ -5,10 +5,12 @@ const payrollController_1 = require("../controllers/payrollController");
 const auth_1 = require("../middleware/auth");
 const roleGuard_1 = require("../middleware/roleGuard");
 const router = (0, express_1.Router)();
-// All payroll endpoints require authentication and BURSAR/ADMIN role
-router.get('/', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR', 'ACCOUNTANT']), payrollController_1.payrollController.getAllPayroll);
-router.get('/staff', auth_1.authMiddleware, payrollController_1.payrollController.getStaffForPayroll);
-router.post('/', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR']), payrollController_1.payrollController.createPayroll);
-router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR']), payrollController_1.payrollController.updatePayroll);
-router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'BURSAR']), payrollController_1.payrollController.deletePayroll);
+// Payroll is privilege-gated: any user holding the 'payroll' privilege (via
+// their role or a direct grant) has full CRUD — ADMIN/PRINCIPAL implicitly pass.
+router.use(auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('payroll'));
+router.get('/', payrollController_1.payrollController.getAllPayroll);
+router.get('/staff', payrollController_1.payrollController.getStaffForPayroll);
+router.post('/', payrollController_1.payrollController.createPayroll);
+router.put('/:id', payrollController_1.payrollController.updatePayroll);
+router.delete('/:id', payrollController_1.payrollController.deletePayroll);
 exports.default = router;

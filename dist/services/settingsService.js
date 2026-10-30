@@ -11,7 +11,7 @@ exports.settingsService = {
             throw new Error('Tenant context missing');
         const school = await prisma_1.prisma.school.findUnique({
             where: { id: tenantId },
-            select: { name: true, subdomain: true },
+            select: { name: true, subdomain: true, logoUrl: true },
         });
         const language = await prisma_1.prisma.globalSetting.findUnique({
             where: { key: 'language' },
@@ -19,6 +19,7 @@ exports.settingsService = {
         return {
             schoolName: school?.name || '',
             language: language?.value || 'en',
+            logoUrl: school?.logoUrl || null,
         };
     },
     updateGeneralSettings: async (data) => {
@@ -38,6 +39,16 @@ exports.settingsService = {
                 create: { key: 'language', value: data.language },
             });
         }
+        return { success: true };
+    },
+    updateLogo: async (logoUrl) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        await prisma_1.prisma.school.update({
+            where: { id: tenantId },
+            data: { logoUrl },
+        });
         return { success: true };
     },
     // ---------- Academic Settings ----------

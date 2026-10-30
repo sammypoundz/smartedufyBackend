@@ -9,6 +9,7 @@ const breakdownItemSchema = z.object({
 // Fee structure creation / update
 export const createFeeStructureSchema = z.object({
   className: z.string().min(1),
+  armName: z.string().min(1).nullable().optional(),
   term: z.string().min(1),
   breakdown: z.array(breakdownItemSchema).min(1),
   deadline: z.string().datetime(), // ISO date string

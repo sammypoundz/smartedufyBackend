@@ -70,7 +70,7 @@ exports.SYSTEM_ROLE_PRIVILEGES = {
         "cbt",
     ],
     BURSAR: ["fees", "expenses", "reports", "inventory"],
-    ACCOUNTANT: ["fees", "expenses", "reports", "payroll"],
+    ACCOUNTANT: ["fees", "expenses", "payroll"],
     LIBRARIAN: ["inventory", "students"],
 };
 exports.DEFAULT_ROLES = [

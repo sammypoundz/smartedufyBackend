@@ -10,17 +10,25 @@ export const feeService = {
   // ---------- Shared helpers ----------
   // Resolve all active students of a class (directly via classId, or via one of
   // the class's arms). Dedupes students that match both conditions.
-  getStudentsInClass: async (tenantId: string, className: string) => {
+  getStudentsInClass: async (tenantId: string, className: string, armName?: string | null) => {
     const cls = await prisma.class.findFirst({
       where: { name: className, schoolId: tenantId },
       select: { id: true },
     });
     if (!cls) return [];
 
+    // An optional arm scope narrows the student set to that arm only
+    // (e.g. fee assigned specifically to "JSS 1 A").
+    const armWhere = armName
+      ? { classId: cls.id, schoolId: tenantId, OR: [{ letter: armName }, { alias: armName }] }
+      : { classId: cls.id, schoolId: tenantId };
+
     const arms = await prisma.arm.findMany({
-      where: { classId: cls.id, schoolId: tenantId },
+      where: armWhere,
       select: { id: true },
     });
+
+    if (armName && arms.length === 0) return [];
 
     const students = await prisma.student.findMany({
       where: {
@@ -46,6 +54,7 @@ export const feeService = {
 
   createFeeStructure: async (data: {
     className: string;
+    armName?: string | null;
     term: string;
     breakdown: BreakdownItem[];
     deadline: Date;
@@ -59,7 +68,7 @@ export const feeService = {
     });
     if (!cls) throw new Error(`Class "${data.className}" not found`);
 
-    const students = await feeService.getStudentsInClass(tenantId, data.className);
+    const students = await feeService.getStudentsInClass(tenantId, data.className, data.armName);
 
     // The breakdown amounts are per student. The fee structure's totalAmount
     // represents the expected class-wide total: per-student fee x student count.
@@ -69,6 +78,7 @@ export const feeService = {
     const feeStructure = await prisma.feeStructure.create({
       data: {
         className: data.className,
+        armName: data.armName || null,
         term: data.term,
         breakdown: data.breakdown as Prisma.JsonArray,
         totalAmount,
@@ -99,6 +109,7 @@ export const feeService = {
     id: string,
     data: Partial<{
       className: string;
+      armName: string | null;
       term: string;
       breakdown: BreakdownItem[];
       deadline: Date;
@@ -115,7 +126,8 @@ export const feeService = {
     // Per-student fee is the sum of the breakdown items; the class-wide total
     // is that fee multiplied by the number of students in the class.
     const className = data.className ?? existing.className;
-    const students = await feeService.getStudentsInClass(tenantId, className);
+    const armName = 'armName' in data ? data.armName : existing.armName;
+    const students = await feeService.getStudentsInClass(tenantId, className, armName);
 
     let perStudentAmount: number | undefined;
     let totalAmount: number | undefined;

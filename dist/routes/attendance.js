@@ -23,11 +23,11 @@ router.get('/arm/:armId', auth_1.authMiddleware, attendanceController_1.attendan
  * Body: { date: string, records: [{ studentId: string, present: boolean }] }
  * Saves/updates attendance for the given date.
  */
-router.post('/arm/:armId', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), attendanceController_1.attendanceController.saveAttendance);
+router.post('/arm/:armId', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('students'), attendanceController_1.attendanceController.saveAttendance);
 /**
  * Legacy endpoint – kept for backward compatibility
  * POST /api/attendance/mark
  * Body: { date: string, records: [{ studentId: string, present: boolean }] }
  */
-router.post('/mark', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), attendanceController_1.attendanceController.mark);
+router.post('/mark', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('students'), attendanceController_1.attendanceController.mark);
 exports.default = router;

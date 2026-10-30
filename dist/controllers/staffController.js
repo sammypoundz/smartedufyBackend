@@ -41,6 +41,7 @@ const staffService_1 = require("../services/staffService");
 const db_1 = __importDefault(require("../config/db"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const XLSX = __importStar(require("xlsx"));
+const client_1 = require("@prisma/client");
 const paramUtils_1 = require("../utils/paramUtils");
 const zod_1 = require("zod");
 const crypto_1 = __importDefault(require("crypto"));
@@ -54,11 +55,33 @@ const roleMap = {
     Librarian: 'LIBRARIAN',
     Bursar: 'BURSAR',
 };
+// Resolve a role label/enum (e.g. "Teacher", "TEACHER", or a custom role's
+// label like "Examiner") to either a Role enum value or the raw name of a
+// custom role defined on the Roles & Privileges page. Returns null if the
+// role does not exist in this school.
+const resolveRole = async (schoolId, name) => {
+    if (!name)
+        return null;
+    // Direct enum hit (e.g. "TEACHER" or a mapped display label).
+    const enumRole = roleMap[name] || client_1.Role[name];
+    if (enumRole)
+        return enumRole;
+    if (!schoolId)
+        return null;
+    // Custom role: match by name or label on the school's RoleDef table.
+    const custom = await db_1.default.roleDef.findFirst({
+        where: { schoolId, OR: [{ name }, { label: name }] },
+    });
+    return custom ? custom.name : null;
+};
 // Zod schema for creating/updating staff
 const createStaffSchema = zod_1.z.object({
     name: zod_1.z.string().min(1),
     email: zod_1.z.string().email(),
     role: zod_1.z.string(),
+    // Secondary roles (dual-role support), e.g. ['TEACHER'] for an
+    // accountant who also teaches.
+    extraRoles: zod_1.z.array(zod_1.z.string()).optional(),
     teacherType: zod_1.z.string().optional(),
     assignedClass: zod_1.z.string().optional(),
     assignedSubjects: zod_1.z.any().optional(), // can be array or JSON string
@@ -113,11 +136,29 @@ exports.staffController = {
         try {
             // Validate with Zod
             const validated = createStaffSchema.parse(req.body);
-            const { name, email, role, teacherType, assignedClass, assignedSubjects } = validated;
-            const enumRole = roleMap[role];
-            if (!enumRole || !STAFF_ROLES.includes(enumRole)) {
+            const { name, email, role, extraRoles, teacherType, assignedClass, assignedSubjects } = validated;
+            // Primary role: system enum OR a custom role defined for this school.
+            // Custom roles can't go in the Role enum column, so they are stored as
+            // the primary entry of the User.roles array (see below).
+            const resolvedRole = await resolveRole(req.schoolId, role);
+            if (!resolvedRole) {
                 return res.status(400).json({ error: 'Invalid staff role' });
             }
+            // Secondary roles can be system roles and/or custom roles.
+            const resolvedExtras = (await Promise.all((extraRoles || []).map((r) => resolveRole(req.schoolId, r)))).filter((r) => !!r && r !== resolvedRole);
+            // The Role enum column only holds system roles; custom roles fall back
+            // to their RoleDef name and become the primary entry in User.roles.
+            const isEnumRole = STAFF_ROLES.includes(resolvedRole) || ['PARENT', 'STUDENT', 'VICE_PRINCIPAL'].includes(resolvedRole);
+            const enumRole = isEnumRole ? resolvedRole : 'TEACHER';
+            const primaryForRoles = resolvedRole;
+            const extraEnumRoles = Array.from(new Set([primaryForRoles, ...resolvedExtras]))
+                .filter((r) => r !== enumRole);
+            // When the primary role is a custom role, TEACHER becomes the enum
+            // placeholder — make sure TEACHER is not accidentally left in extras
+            // unless it was actually selected.
+            const finalExtras = enumRole === 'TEACHER' && !isEnumRole
+                ? extraEnumRoles.filter((r) => r !== 'TEACHER')
+                : extraEnumRoles;
             // Check if email exists
             const existing = await db_1.default.user.findUnique({ where: { email } });
             if (existing)
@@ -129,6 +170,7 @@ exports.staffController = {
                 name,
                 email,
                 role: enumRole,
+                roles: finalExtras.length ? Array.from(new Set([primaryForRoles, ...finalExtras])) : undefined,
                 hashedPassword,
                 teacherType,
                 assignedClass,
@@ -152,12 +194,31 @@ exports.staffController = {
         try {
             // Use Zod for validation (optional fields)
             const validated = createStaffSchema.partial().parse(req.body);
-            const { name, email, role, teacherType, assignedClass, assignedSubjects } = validated;
-            let enumRole;
+            const { name, email, role, extraRoles, teacherType, assignedClass, assignedSubjects } = validated;
+            let resolvedRole;
             if (role) {
-                enumRole = roleMap[role];
-                if (!enumRole || !STAFF_ROLES.includes(enumRole)) {
+                resolvedRole = (await resolveRole(req.schoolId, role)) ?? undefined;
+                if (!resolvedRole) {
                     return res.status(400).json({ error: 'Invalid staff role' });
+                }
+            }
+            const resolvedExtras = extraRoles !== undefined
+                ? (await Promise.all(extraRoles.map((r) => resolveRole(req.schoolId, r))))
+                    .filter((r) => !!r)
+                : undefined;
+            const isEnumRole = resolvedRole !== undefined
+                && (STAFF_ROLES.includes(resolvedRole) || ['PARENT', 'STUDENT', 'VICE_PRINCIPAL'].includes(resolvedRole));
+            let enumRole;
+            if (resolvedRole !== undefined) {
+                enumRole = isEnumRole ? resolvedRole : 'TEACHER';
+            }
+            let extraEnumRoles;
+            if (resolvedExtras !== undefined) {
+                const primary = resolvedRole ?? enumRole;
+                extraEnumRoles = Array.from(new Set([primary, ...resolvedExtras].filter((r) => !!r))).filter((r) => r !== enumRole);
+                // Drop the TEACHER placeholder when the primary role is custom.
+                if (resolvedRole !== undefined && !isEnumRole) {
+                    extraEnumRoles = extraEnumRoles.filter((r) => r !== 'TEACHER');
                 }
             }
             const subjectsArray = parseAssignedSubjects(assignedSubjects);
@@ -165,6 +226,9 @@ exports.staffController = {
                 name,
                 email,
                 role: enumRole,
+                roles: extraEnumRoles !== undefined && resolvedRole !== undefined
+                    ? Array.from(new Set([resolvedRole, ...extraEnumRoles]))
+                    : undefined,
                 teacherType,
                 assignedClass,
                 assignedSubjects: subjectsArray,

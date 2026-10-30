@@ -10,9 +10,15 @@ const multer_1 = __importDefault(require("multer"));
 const staffController_1 = require("../controllers/staffController");
 const router = (0, express_1.Router)();
 const upload = (0, multer_1.default)({ dest: 'uploads/' });
-// All routes require authentication and admin role
+// All routes require authentication; the whole router is gated on the 'staff'
+// privilege so granted users get full CRUD (ADMIN/PRINCIPAL implicitly pass).
 router.use(auth_1.authMiddleware);
-router.use((0, roleGuard_1.roleGuard)(['ADMIN']));
+router.use((0, roleGuard_1.privilegeGuard)('staff', 'teachers'));
+// Expose the tenant id on the request for role resolution in the controller.
+router.use((req, _res, next) => {
+    req.schoolId = req.user?.schoolId;
+    next();
+});
 router.get('/', staffController_1.staffController.getAll);
 router.get('/:id', staffController_1.staffController.getById);
 router.post('/', staffController_1.staffController.create);

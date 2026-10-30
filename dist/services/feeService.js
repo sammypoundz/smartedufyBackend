@@ -11,17 +11,24 @@ exports.feeService = {
     // ---------- Shared helpers ----------
     // Resolve all active students of a class (directly via classId, or via one of
     // the class's arms). Dedupes students that match both conditions.
-    getStudentsInClass: async (tenantId, className) => {
+    getStudentsInClass: async (tenantId, className, armName) => {
         const cls = await db_1.default.class.findFirst({
             where: { name: className, schoolId: tenantId },
             select: { id: true },
         });
         if (!cls)
             return [];
+        // An optional arm scope narrows the student set to that arm only
+        // (e.g. fee assigned specifically to "JSS 1 A").
+        const armWhere = armName
+            ? { classId: cls.id, schoolId: tenantId, OR: [{ letter: armName }, { alias: armName }] }
+            : { classId: cls.id, schoolId: tenantId };
         const arms = await db_1.default.arm.findMany({
-            where: { classId: cls.id, schoolId: tenantId },
+            where: armWhere,
             select: { id: true },
         });
+        if (armName && arms.length === 0)
+            return [];
         const students = await db_1.default.student.findMany({
             where: {
                 schoolId: tenantId,
@@ -51,7 +58,7 @@ exports.feeService = {
         });
         if (!cls)
             throw new Error(`Class "${data.className}" not found`);
-        const students = await exports.feeService.getStudentsInClass(tenantId, data.className);
+        const students = await exports.feeService.getStudentsInClass(tenantId, data.className, data.armName);
         // The breakdown amounts are per student. The fee structure's totalAmount
         // represents the expected class-wide total: per-student fee x student count.
         const perStudentAmount = data.breakdown.reduce((sum, item) => sum + item.amount, 0);
@@ -59,6 +66,7 @@ exports.feeService = {
         const feeStructure = await db_1.default.feeStructure.create({
             data: {
                 className: data.className,
+                armName: data.armName || null,
                 term: data.term,
                 breakdown: data.breakdown,
                 totalAmount,
@@ -93,7 +101,8 @@ exports.feeService = {
         // Per-student fee is the sum of the breakdown items; the class-wide total
         // is that fee multiplied by the number of students in the class.
         const className = data.className ?? existing.className;
-        const students = await exports.feeService.getStudentsInClass(tenantId, className);
+        const armName = 'armName' in data ? data.armName : existing.armName;
+        const students = await exports.feeService.getStudentsInClass(tenantId, className, armName);
         let perStudentAmount;
         let totalAmount;
         if (data.breakdown) {
@@ -275,6 +284,82 @@ exports.feeService = {
             },
         });
         return payment;
+    },
+    /** Recompute StudentFee amountPaid/status from its itemised FeePayment rows. */
+    recalcStudentFee: async (studentId, feeStructureId, tenantId) => {
+        const studentFee = await db_1.default.studentFee.findUnique({
+            where: {
+                studentId_feeStructureId: { studentId, feeStructureId },
+            },
+        });
+        if (!studentFee)
+            return null;
+        const payments = await db_1.default.feePayment.findMany({
+            where: { studentId, feeStructureId, schoolId: tenantId },
+        });
+        const totalPaid = payments.reduce((sum, p) => sum + (p.amountPaid || 0), 0);
+        let status = 'PARTIAL';
+        if (totalPaid >= studentFee.amountAssigned && totalPaid > 0)
+            status = 'PAID';
+        else if (totalPaid === 0)
+            status = 'PENDING';
+        return db_1.default.studentFee.update({
+            where: { id: studentFee.id, schoolId: tenantId },
+            data: { amountPaid: totalPaid, status },
+        });
+    },
+    updatePayment: async (paymentId, data) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        const payment = await db_1.default.feePayment.findUnique({
+            where: { id: paymentId, schoolId: tenantId },
+        });
+        if (!payment)
+            throw new Error('Payment not found');
+        const totalFromItems = data.breakdownItems.reduce((sum, i) => sum + i.amount, 0);
+        if (totalFromItems !== data.amountPaid) {
+            throw new Error('Sum of breakdown items must equal total amount paid');
+        }
+        // If every item was unmarked (amount 0), remove the payment entirely
+        // and recalculate the student's outstanding balance.
+        if (totalFromItems === 0) {
+            await db_1.default.feePayment.delete({
+                where: { id: paymentId, schoolId: tenantId },
+            });
+            await exports.feeService.recalcStudentFee(payment.studentId, payment.feeStructureId, tenantId);
+            return { message: 'Payment fully unmarked and removed' };
+        }
+        const updated = await db_1.default.feePayment.update({
+            where: { id: paymentId, schoolId: tenantId },
+            data: {
+                amountPaid: data.amountPaid,
+                paymentMethod: data.paymentMethod,
+                reference: data.reference || null,
+                breakdownItems: data.breakdownItems,
+            },
+            include: {
+                student: { select: { name: true, admissionNumber: true } },
+                feeStructure: true,
+            },
+        });
+        await exports.feeService.recalcStudentFee(payment.studentId, payment.feeStructureId, tenantId);
+        return updated;
+    },
+    deletePayment: async (paymentId) => {
+        const tenantId = (0, tenantContext_1.getCurrentTenantId)();
+        if (!tenantId)
+            throw new Error('Tenant context missing');
+        const payment = await db_1.default.feePayment.findUnique({
+            where: { id: paymentId, schoolId: tenantId },
+        });
+        if (!payment)
+            throw new Error('Payment not found');
+        await db_1.default.feePayment.delete({
+            where: { id: paymentId, schoolId: tenantId },
+        });
+        await exports.feeService.recalcStudentFee(payment.studentId, payment.feeStructureId, tenantId);
+        return { message: 'Payment removed' };
     },
     // ---------- Messaging (real implementation) ----------
     sendMessage: async (studentId, type, subject, message) => {

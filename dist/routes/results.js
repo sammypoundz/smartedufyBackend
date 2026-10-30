@@ -18,14 +18,14 @@ router.get('/history', auth_1.authMiddleware, resultController_1.resultControlle
  */
 router.get('/', auth_1.authMiddleware, resultController_1.resultController.getByFilters);
 // Bulk upsert results (create or update many)
-router.post('/bulk', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), resultController_1.resultController.bulkUpsert);
+router.post('/bulk', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('results'), resultController_1.resultController.bulkUpsert);
 // ---------- NEW: Push test attempts to results ----------
 /**
  * POST /api/results/from-test-attempts
  * Takes test attempt scores and creates Result records (CA or Exam).
  * Body: { testId, academicYearId, term, resultType }
  */
-router.post('/from-test-attempts', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), resultController_1.resultController.pushTestAttemptsToResults);
+router.post('/from-test-attempts', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('results'), resultController_1.resultController.pushTestAttemptsToResults);
 console.log('✅ POST /from-test-attempts registered');
 // ---------- Routes with path parameters ----------
 // Get results for a specific student (optionally filtered by academicYearId via query)
@@ -37,9 +37,9 @@ router.get('/subject/:subjectId', auth_1.authMiddleware, resultController_1.resu
 // (Optional) Get results for an academic year (all records)
 router.get('/academic-year/:academicYearId', auth_1.authMiddleware, resultController_1.resultController.getByAcademicYear);
 // Create a new result (single)
-router.post('/', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), resultController_1.resultController.create);
+router.post('/', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('results'), resultController_1.resultController.create);
 // Update an existing result
-router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), resultController_1.resultController.update);
+router.put('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('results'), resultController_1.resultController.update);
 // Delete a result
-router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.roleGuard)(['ADMIN', 'TEACHER']), resultController_1.resultController.delete);
+router.delete('/:id', auth_1.authMiddleware, (0, roleGuard_1.privilegeGuard)('results'), resultController_1.resultController.delete);
 exports.default = router;

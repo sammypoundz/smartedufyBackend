@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../config/prisma';
@@ -22,6 +23,115 @@ router.get('/schools', async (_req, res, next) => {
     });
     res.json({ schools });
   } catch (err) {
+    next(err);
+  }
+});
+
+// School self-signup: creates a NEW school (tenant) together with its first
+// ADMIN account in one atomic operation. Public – no auth required.
+router.post('/register-school', async (req, res, next) => {
+  try {
+    const schoolSchema = z.object({
+      schoolName: z.string().min(2, 'School name is required').max(120),
+      adminName: z.string().min(2, 'Admin name is required').max(120),
+      email: z.string().email(),
+      phone: z.string().max(30).optional(),
+      password: z.string().min(6, 'Password must be at least 6 characters'),
+    });
+    const data = schoolSchema.parse(req.body);
+
+    const existingSchool = await prisma.school.findFirst({
+      where: { name: { equals: data.schoolName, mode: 'insensitive' } },
+    });
+    if (existingSchool) {
+      return res.status(409).json({ error: 'A school with this name already exists.' });
+    }
+    const existingUser = await prisma.user.findUnique({ where: { email: data.email } });
+    if (existingUser) {
+      return res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(data.password, 10);
+
+    // Create the school tenant first, then the admin user inside its tenant
+    // context so the ID generator can assign an ADMIN code.
+    const school = await prisma.school.create({ data: { name: data.schoolName } });
+
+    let admin;
+    try {
+      admin = await runWithTenant(school.id, async () => {
+        const userIdCode = await idGeneratorService.claimNextId('ADMIN');
+        return prisma.$transaction(async (tx) => {
+          const createdAdmin = await tx.user.create({
+            data: {
+              name: data.adminName,
+              email: data.email,
+              phone: data.phone || null,
+              password: hashedPassword,
+              role: 'ADMIN',
+              isActive: true,
+              schoolId: school.id,
+              userIdCode,
+            },
+          });
+          // MongoDB connector: no createMany – create the default system
+          // roles one by one.
+          for (const name of ['ADMIN', 'TEACHER', 'STUDENT', 'PARENT']) {
+            await tx.roleDef.upsert({
+              where: { schoolId_name: { schoolId: school.id, name } },
+              update: {},
+              create: { schoolId: school.id, name, isSystem: true },
+            });
+          }
+          return createdAdmin;
+        });
+      });
+    } catch (err) {
+      // Roll the new school back so a half-created tenant isn't left behind
+      await prisma.school.delete({ where: { id: school.id } }).catch(() => {});
+      throw err;
+    }
+
+    logActivity({
+      schoolId: school.id,
+      userId: admin.id,
+      userName: admin.name,
+      userEmail: admin.email,
+      userRole: 'ADMIN',
+      action: 'SCHOOL_SIGNUP',
+      entity: 'School',
+      entityId: school.id,
+      description: `School "${school.name}" registered with admin account ${admin.email}`,
+      method: 'POST',
+      path: '/api/auth/register-school',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    const token = jwt.sign(
+      { id: admin.id, role: 'ADMIN', roles: ['ADMIN'], schoolId: school.id },
+      process.env.JWT_SECRET!,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      token,
+      school: { id: school.id, name: school.name },
+      user: {
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        role: 'ADMIN',
+        roles: ['ADMIN'],
+        isActive: true,
+        schoolId: school.id,
+        userIdCode: admin.userIdCode,
+      },
+    });
+  } catch (err: any) {
+    if (err?.name === 'ZodError') {
+      return res.status(400).json({ error: err.issues?.[0]?.message || 'Invalid input' });
+    }
     next(err);
   }
 });

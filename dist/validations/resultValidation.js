@@ -8,7 +8,10 @@ exports.createResultSchema = zod_1.z.object({
     subjectId: zod_1.z.string(),
     armId: zod_1.z.string().optional(), // required for new format
     term: zod_1.z.string(),
-    // New fields (ca + exam)
+    // New fields (3 CAs + exam). 'ca' is the total of ca1+ca2+ca3.
+    ca1: zod_1.z.number().min(0).max(100).optional(),
+    ca2: zod_1.z.number().min(0).max(100).optional(),
+    ca3: zod_1.z.number().min(0).max(100).optional(),
     ca: zod_1.z.number().min(0).max(100).optional(),
     exam: zod_1.z.number().min(0).max(100).optional(),
     // Old field (score) – still accepted
@@ -25,6 +28,9 @@ exports.createResultSchema = zod_1.z.object({
 });
 // Schema for updating a result (partial)
 exports.updateResultSchema = zod_1.z.object({
+    ca1: zod_1.z.number().min(0).max(100).optional(),
+    ca2: zod_1.z.number().min(0).max(100).optional(),
+    ca3: zod_1.z.number().min(0).max(100).optional(),
     ca: zod_1.z.number().min(0).max(100).optional(),
     exam: zod_1.z.number().min(0).max(100).optional(),
     total: zod_1.z.number().min(0).max(100).optional(),
@@ -39,6 +45,9 @@ exports.bulkResultSchema = zod_1.z.object({
         subjectId: zod_1.z.string(),
         armId: zod_1.z.string(),
         term: zod_1.z.string(),
+        ca1: zod_1.z.number().min(0).max(100).optional(),
+        ca2: zod_1.z.number().min(0).max(100).optional(),
+        ca3: zod_1.z.number().min(0).max(100).optional(),
         ca: zod_1.z.number().min(0).max(100),
         exam: zod_1.z.number().min(0).max(100),
         total: zod_1.z.number().min(0).max(100), // ca + exam

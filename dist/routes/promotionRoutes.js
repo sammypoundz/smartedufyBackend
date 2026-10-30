@@ -6,6 +6,6 @@ const auth_1 = require("../middleware/auth");
 const roleGuard_1 = require("../middleware/roleGuard");
 const router = (0, express_1.Router)();
 router.use(auth_1.authMiddleware);
-router.post('/promote', (0, roleGuard_1.roleGuard)(['ADMIN']), promotionController_1.promotionController.promote);
-router.post('/bulk-promote', (0, roleGuard_1.roleGuard)(['ADMIN']), promotionController_1.promotionController.bulkPromote);
+router.post('/promote', (0, roleGuard_1.privilegeGuard)('students'), promotionController_1.promotionController.promote);
+router.post('/bulk-promote', (0, roleGuard_1.privilegeGuard)('students'), promotionController_1.promotionController.bulkPromote);
 exports.default = router;
