@@ -13,6 +13,8 @@ import {
   extractFromImage,
   validateAgainstSchool,
   registerApprovedStudents,
+  listMissingClasses,
+  ensureClassesForBatch,
 } from "../services/onboardingService";
 import { logAiUsage } from "../services/aiUsageService";
 import { logPlatformActivity } from "../services/platformAuditService";
@@ -274,6 +276,41 @@ router.post(
       name: req.platformUser!.name,
     });
     res.json(report);
+  }),
+);
+
+// Classes referenced by the batch that don't exist in the target school —
+// used by the UI to prompt for confirmation before creating them.
+router.get(
+  "/:id/missing-classes",
+  platformAuth,
+  requirePlatformRole("SUPER_ADMIN", "ONBOARDING_OFFICER"),
+  asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
+    const batch = await prisma.onboardingBatch.findUnique({
+      where: { id: String(req.params.id) },
+    });
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    const missing = await listMissingClasses(batch.schoolId, batch.id);
+    res.json({ missingClasses: missing });
+  }),
+);
+
+// Confirm-then-create: create missing classes (each with an "Arm A" arm) so
+// students in the batch can be registered into a class+arm immediately.
+router.post(
+  "/:id/ensure-classes",
+  platformAuth,
+  requirePlatformRole("SUPER_ADMIN", "ONBOARDING_OFFICER"),
+  asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
+    const batch = await prisma.onboardingBatch.findUnique({
+      where: { id: String(req.params.id) },
+    });
+    if (!batch) return res.status(404).json({ error: "Batch not found" });
+    const result = await ensureClassesForBatch(batch.schoolId, batch.id, {
+      id: req.platformUser!.id,
+      name: req.platformUser!.name,
+    });
+    res.json(result);
   }),
 );
 

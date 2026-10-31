@@ -243,6 +243,132 @@ export async function validateAgainstSchool(
   });
 }
 
+/**
+ * Create any classes referenced by a batch's approved records that don't exist
+ * in the school yet. Every created class also gets an "Arm A" arm, so students
+ * can be placed into a class+arm immediately (the school portal's rosters are
+ * arm-based). Returns what was created so the UI can confirm it.
+ */
+export async function ensureClassesForBatch(
+  schoolId: string,
+  batchId: string,
+  admin: { id: string; name: string },
+) {
+  const batch = await prisma.onboardingBatch.findUnique({
+    where: { id: batchId },
+    include: { records: { select: { className: true, status: true } } },
+  });
+  if (!batch || batch.schoolId !== schoolId)
+    throw Object.assign(new Error("Batch not found"), { status: 404 });
+
+  // Distinct non-empty class names from usable records (not rejected/dupes)
+  const wanted = [
+    ...new Set(
+      batch.records
+        .filter((r) => r.status !== "REJECTED" && r.status !== "DUPLICATE")
+        .map((r) => r.className?.trim())
+        .filter((c): c is string => !!c),
+    ),
+  ];
+
+  const existing = await prisma.class.findMany({
+    where: { schoolId },
+    select: { id: true, name: true },
+  });
+  const existingByKey = new Map(
+    existing.map((c) => [normalizeClassName(c.name), c]),
+  );
+
+  const createdClasses: string[] = [];
+  const createdArms: string[] = [];
+  for (const name of wanted) {
+    const key = normalizeClassName(name);
+    if (existingByKey.has(key)) continue;
+
+    const cls = await prisma.class.create({
+      data: { schoolId, name },
+    });
+    existingByKey.set(key, { id: cls.id, name });
+    createdClasses.push(name);
+
+    // Every new class gets an "Arm A" so students have a placement target.
+    const arm = await prisma.arm.create({
+      data: { schoolId, letter: "A", classId: cls.id },
+    });
+    createdArms.push(`${name} — Arm A`);
+  }
+
+  if (createdClasses.length) {
+    await logPlatformActivity({
+      actorId: admin.id,
+      actorName: admin.name,
+      action: "ONBOARDING_CLASSES_CREATE",
+      targetType: "OnboardingBatch",
+      targetId: batchId,
+      description: `Created ${createdClasses.length} class(es) from onboarding batch: ${createdClasses.join(", ")}`,
+    });
+  }
+
+  return { createdClasses, createdArms };
+}
+
+/**
+ * Class names referenced by a batch's usable records that don't exist in the
+ * school yet (fuzzy-compared via normalizeClassName). Used to prompt the
+ * Super Admin for confirmation before creating class + "Arm A".
+ */
+export async function listMissingClasses(schoolId: string, batchId: string) {
+  const batch = await prisma.onboardingBatch.findUnique({
+    where: { id: batchId },
+    include: { records: { select: { className: true, status: true } } },
+  });
+  if (!batch || batch.schoolId !== schoolId)
+    throw Object.assign(new Error("Batch not found"), { status: 404 });
+  const wanted = [
+    ...new Set(
+      batch.records
+        .filter((r) => r.status !== "REJECTED" && r.status !== "DUPLICATE")
+        .map((r) => r.className?.trim())
+        .filter((c): c is string => !!c),
+    ),
+  ];
+  const existing = await prisma.class.findMany({
+    where: { schoolId },
+    select: { name: true },
+  });
+  const existingKeys = new Set(existing.map((c) => normalizeClassName(c.name)));
+  return wanted.filter((name) => !existingKeys.has(normalizeClassName(name)));
+}
+
+/**
+ * Class name normalizer used for fuzzy matching ("JSS1" ≈ "JSS 1",
+ * "Primary 4." ≈ "Primary 4"). Also fixes digit gaps and common aliases.
+ */
+export function normalizeClassName(name: string): string {
+  let n = name.toLowerCase().trim();
+  n = n.replace(/\u00a0/g, " "); // nbsp
+  n = n.replace(/[.\-_]/g, " ");
+  n = n.replace(/jss ?(\d)/g, "jss $1");
+  n = n.replace(/ss ?(\d)/g, "ss $1");
+  n = n.replace(/primary ?(\d)/g, "primary $1");
+  n = n.replace(/grade ?(\d)/g, "primary $1");
+  n = n.replace(/\s+/g, " ");
+  // Common aliases
+  if (/^js\s?\d$/.test(n)) n = n.replace("js ", "jss ");
+  if (/^sss\s?\d$/.test(n)) n = n.replace("sss ", "ss ");
+  return n.trim();
+}
+
+/** Find the id of a class by fuzzy class-name match. */
+function findClassId(
+  classes: { id: string; name: string }[],
+  className: string,
+): string | null {
+  const key = normalizeClassName(className);
+  const hit = classes.find((c) => normalizeClassName(c.name) === key);
+  return hit?.id || null;
+}
+
 /** Bulk-register approved students into the school (Module 9 Step 6). */
 export async function registerApprovedStudents(
   schoolId: string,
@@ -259,12 +385,24 @@ export async function registerApprovedStudents(
     throw Object.assign(new Error("Batch already completed"), { status: 400 });
 
   const approved = batch.records.filter((r) => r.status === "APPROVED");
-  // Map class names to class IDs once
+  // Map class names to class IDs once, and each class to its "Arm A" arm
+  // (created on demand by ensureClassesForBatch) so students land in a
+  // class + arm and show up on the school portal's arm rosters.
   const classes = await prisma.class.findMany({
     where: { schoolId },
     select: { id: true, name: true },
   });
-  const classMap = new Map(classes.map((c) => [c.name.toLowerCase(), c.id]));
+  const classMap = new Map(
+    classes.map((c) => [normalizeClassName(c.name), c.id]),
+  );
+  const armMap = new Map<string, string>();
+  for (const cls of classes) {
+    const arm = await prisma.arm.findFirst({
+      where: { classId: cls.id, letter: "A" },
+      select: { id: true },
+    });
+    if (arm) armMap.set(cls.id, arm.id);
+  }
 
   let registered = 0,
     duplicates = 0,
@@ -272,8 +410,9 @@ export async function registerApprovedStudents(
   for (const rec of approved) {
     try {
       const classId = rec.className
-        ? classMap.get(rec.className.toLowerCase()) || null
+        ? classMap.get(normalizeClassName(rec.className)) || null
         : null;
+      const armId = classId ? armMap.get(classId) || null : null;
       // Duplicate guard: same admission number or same name in this school
       const dup = await runWithTenant(schoolId, () =>
         prisma.student.findFirst({
@@ -309,6 +448,7 @@ export async function registerApprovedStudents(
           religion: rec.religion || undefined,
           admissionNumber: rec.admissionNumber || undefined,
           classId: classId || undefined,
+          armId: armId || undefined,
         }),
       );
       await prisma.onboardingRecord.update({
