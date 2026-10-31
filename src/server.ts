@@ -77,16 +77,20 @@ app.get('/api/health', (req, res) => {
 });
 app.use('/api/auth', authRoutes); // login, register, etc.
 
+// ---------- Super Admin console — SEPARATE auth realm ----------
+// Mounted BEFORE the global auth/tenant middleware: platform routes use their
+// own JWT realm (platformAuth) and platform users have no school tenant, so
+// they must not pass through authMiddleware (which demands a token on every
+// request) or tenantMiddleware (which demands an X-Tenant-ID header).
+app.use('/api/platform', platformRoutes);
+app.use('/api/platform/onboarding', platformOnboardingRoutes);
+
 // ---------- Global authentication & tenant middleware ----------
 app.use(authMiddleware);      // sets req.user
 app.use(tenantMiddleware);    // sets tenant context & validates user belongs to tenant
 app.use(auditMiddleware);     // logs every mutating request
 
 // ---------- Protected routes (require authentication & tenant) ----------
-// Super Admin console — SEPARATE realm mounted BEFORE the global tenant
-// middleware so platform JWTs (no X-Tenant-ID) pass cleanly.
-app.use('/api/platform', platformRoutes);
-app.use('/api/platform/onboarding', platformOnboardingRoutes);
 
 app.use('/api/classes', classRoutes);
 app.use('/api/arms', armRoutes);
