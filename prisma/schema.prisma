@@ -956,6 +956,273 @@ model QuestionDoc {
   updatedAt   DateTime @updatedAt
 }
 
+// ========== SUPER ADMIN PLATFORM MODELS ==========
+// The Super Admin dashboard sits above all school tenants. These models are
+// deliberately school-scoped where they represent a school's data (wallets,
+// subscriptions) and unscoped where they represent platform data (users of
+// the platform console, notifications, platform expenses).
+
+// ---- Platform console users (NOT school tenants) ----
+model PlatformUser {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  name          String
+  email         String   @unique
+  password      String
+  role          String   @default("ANALYTICS_VIEWER")
+  // SUPER_ADMIN | FINANCE_ADMIN | ONBOARDING_OFFICER | SUPPORT_OFFICER | ANALYTICS_VIEWER
+  isActive      Boolean  @default(true)
+  mfaEnabled    Boolean  @default(false)
+  mfaSecret     String?
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("platform_users")
+}
+
+// ---- Audit trail for every sensitive platform action ----
+model PlatformAuditLog {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  actorId     String   @db.ObjectId // PlatformUser id
+  actorName   String?
+  actorRole   String?
+  action      String   // e.g. SCHOOL_SUSPEND, WALLET_ADJUST, PLAN_CREATE, LOGIN
+  targetType  String?  // e.g. School, Wallet, Subscription
+  targetId    String?
+  description String
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@map("platform_audit_logs")
+}
+
+// ---- Subscription plans (platform-level, no schoolId) ----
+model SubscriptionPlan {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  name          String   @unique
+  description   String?
+  // Monthly recurring price in NGN per school
+  monthlyPrice  Float
+  isActive      Boolean  @default(true)
+  maxStudents   Int?     // capacity cap enforced server-side
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+// ---- School subscriptions ----
+model Subscription {
+  id            String             @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId      String   @db.ObjectId
+  planId        String   @db.ObjectId
+  plan          SubscriptionPlan @relation(fields: [planId], references: [id])
+  status        String   @default("ACTIVE")
+  // ACTIVE | EXPIRED | TRIAL | SUSPENDED | PENDING_RENEWAL
+  billingCycle  String   @default("MONTHLY")
+  // MONTHLY | QUARTERLY | TERMLY | HALF_YEARLY | ANNUAL
+  startDate     DateTime @default(now())
+  endDate       DateTime
+  trial          Boolean @default(false)
+  // Cycle lengths in months for computing end dates from payments
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments      SubscriptionPayment[]
+
+  @@unique([schoolId])
+  @@index([status, endDate])
+  @@map("subscriptions")
+}
+
+// ---- Verified subscription payments (the only revenue source for subs) ----
+model SubscriptionPayment {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String   @db.ObjectId
+  subscriptionId String   @db.ObjectId
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  amount         Float
+  method         String   @default("TRANSFER")
+  // TRANSFER | CARD | USSD | CASH | ADJUSTMENT
+  reference      String?
+  verified       Boolean  @default(true) // false = pending reconciliation
+  paidAt         DateTime @default(now())
+  note           String?
+  createdAt      DateTime @default(now())
+
+  @@index([schoolId, paidAt])
+  @@index([paidAt])
+  @@map("subscription_payments")
+}
+
+// ---- Edufy AI token wallet (one per school) ----
+model TokenWallet {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId     String   @unique @db.ObjectId
+  balance      Int      @default(0)   // settled tokens available
+  reserved     Int      @default(0)   // held for in-flight AI operations
+  lifetimePurchased Int @default(0)
+  lifetimeConsumed  Int @default(0)
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+
+  ledger TokenLedger[]
+
+  @@map("token_wallets")
+}
+
+// ---- Immutable token ledger (purchase / charge / credit / reversal) ----
+model TokenLedger {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  type        String   // PURCHASE | CHARGE | CREDIT | REFUND | RELEASE | ADJUSTMENT
+  amount      Int      // signed: positive adds tokens, negative removes
+  balanceAfter Int
+  reference   String?  // idempotency key: payment ref or AI log id
+  description String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  wallet TokenWallet @relation(fields: [walletId], references: [id])
+  walletId String @db.ObjectId
+
+  @@unique([schoolId, reference]) // idempotency at the DB level
+  @@index([schoolId, createdAt])
+  @@map("token_ledger")
+}
+
+// ---- AI usage & cost log (one row per AI operation) ----
+model AiUsageLog {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId        String?  @db.ObjectId // null for platform (super-admin onboarding)
+  userId          String?  @db.ObjectId
+  operation       String   // RESULT_SCAN | ONBOARDING_EXTRACT | ...
+  provider        String   @default("gemini")
+  model           String
+  status          String   // SUCCESS | FAILED
+  requests        Int      @default(1)
+  retries         Int      @default(0)
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  costUsd         Float    @default(0)
+  costUsdEstimated Boolean @default(true)
+  exchangeRate    Float    @default(1600) // USD -> NGN
+  costNgn         Float    @default(0)
+  tokensCharged   Int      @default(0)   // school tokens actually charged
+  revenueNgn      Float    @default(0)   // tokensCharged × token price
+  processingMs    Int?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([operation, createdAt])
+  @@map("ai_usage_logs")
+}
+
+// ---- Platform expenses (AI costs, hosting, etc.) ----
+model PlatformExpense {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  category    String   // AI_PROCESSING | HOSTING | INFRASTRUCTURE | OTHER
+  description String?
+  amount      Float
+  date        DateTime @default(now())
+  source      String   @default("MANUAL") // MANUAL | AI_AUTO
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([category, date])
+  @@map("platform_expenses")
+}
+
+// ---- AI student onboarding batches (Super Admin center) ----
+model OnboardingBatch {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  fileName    String
+  fileUrl     String?  // optional uploaded source document
+  fileType    String?
+  status      String   @default("EXTRACTED")
+  // EXTRACTED | COMPLETED | FAILED
+  source      String   @default("AI") // AI | SPREADSHEET
+  extracted   Int      @default(0)
+  registered  Int      @default(0)
+  duplicates  Int      @default(0)
+  rejected    Int      @default(0)
+  missingInfo Int      @default(0)
+  aiCostNgn   Float    @default(0)
+  durationMs  Int?
+  adminId     String   @db.ObjectId
+  adminName   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  records OnboardingRecord[]
+
+  @@index([schoolId, createdAt])
+  @@map("onboarding_batches")
+}
+
+model OnboardingRecord {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  batchId         String   @db.ObjectId
+  batch           OnboardingBatch @relation(fields: [batchId], references: [id])
+  name            String
+  gender          String?
+  className       String?
+  admissionNumber String?
+  dateOfBirth     DateTime?
+  parentName      String?
+  parentPhone     String?
+  parentEmail     String?
+  confidence      String   @default("medium")
+  flags           String[] @default([]) // MISSING_FIELDS | DUPLICATE | LOW_CONFIDENCE
+  duplicateOfId   String?  @db.ObjectId
+  status          String   @default("PENDING")
+  // PENDING | APPROVED | REJECTED | REGISTERED | DUPLICATE
+  registeredStudentId String? @db.ObjectId
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([batchId])
+  @@map("onboarding_records")
+}
+
+// ---- Platform notifications (admin alert center) ----
+model PlatformNotification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  type      String   // SCHOOL_REGISTERED | SUBSCRIPTION_EXPIRING | PAYMENT | TOKEN_PURCHASE | LOW_BALANCE | AI_SPIKE | SYNC_FAILURE | SCHOOL_INACTIVITY | SYSTEM
+  severity  String   @default("INFO") // INFO | WARNING | CRITICAL
+  title     String
+  message   String
+  schoolId  String?  @db.ObjectId
+  isRead    Boolean  @default(false)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([isRead, createdAt])
+  @@map("platform_notifications")
+}
+
+// ---- Sync monitoring for SmartEdufy Lite offline clients ----
+model SyncLog {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  deviceId    String?
+  status      String   // SUCCESS | FAILED | PARTIAL
+  itemsSynced Int      @default(0)
+  errorMessage String?
+  createdAt   DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@map("sync_logs")
+}
+
 enum Role {
   ADMIN
   TEACHER

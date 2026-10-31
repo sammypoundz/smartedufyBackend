@@ -37,6 +37,8 @@ import auditLogRoutes from './routes/auditLogs';
 import questionDocRoutes from './routes/questionDocRoutes';
 import offlineRoutes from './routes/offlineRoutes';
 import aiScanRoutes from './routes/aiScanRoutes';
+import platformRoutes from './routes/platformRoutes';
+import platformOnboardingRoutes from './routes/platformOnboardingRoutes';
 
 
 // Import middleware
@@ -81,6 +83,11 @@ app.use(tenantMiddleware);    // sets tenant context & validates user belongs to
 app.use(auditMiddleware);     // logs every mutating request
 
 // ---------- Protected routes (require authentication & tenant) ----------
+// Super Admin console — SEPARATE realm mounted BEFORE the global tenant
+// middleware so platform JWTs (no X-Tenant-ID) pass cleanly.
+app.use('/api/platform', platformRoutes);
+app.use('/api/platform/onboarding', platformOnboardingRoutes);
+
 app.use('/api/classes', classRoutes);
 app.use('/api/arms', armRoutes);
 app.use('/api/subjects', subjectRoutes);
