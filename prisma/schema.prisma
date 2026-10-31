@@ -1174,6 +1174,7 @@ model OnboardingRecord {
   batch           OnboardingBatch @relation(fields: [batchId], references: [id])
   name            String
   gender          String?
+  religion        String?
   className       String?
   admissionNumber String?
   dateOfBirth     DateTime?

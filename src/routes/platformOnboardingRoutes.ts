@@ -155,6 +155,7 @@ router.post(
         batchId: batch.id,
         name: v.name,
         gender: v.gender || undefined,
+        religion: v.religion || undefined,
         className: v.className || undefined,
         admissionNumber: v.admissionNumber || undefined,
         dateOfBirth:
@@ -227,6 +228,7 @@ router.patch(
     const schema = z.object({
       name: z.string().min(1).optional(),
       gender: z.string().nullable().optional(),
+      religion: z.string().nullable().optional(),
       className: z.string().nullable().optional(),
       admissionNumber: z.string().nullable().optional(),
       status: z.enum(["PENDING", "APPROVED", "REJECTED"]).optional(),

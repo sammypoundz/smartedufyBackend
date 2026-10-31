@@ -60,7 +60,7 @@ export const studentService = {
     }); // middleware adds schoolId
   },
 
-  create: async (data: { name: string; gender?: string; admissionNumber?: string; classId?: string; armId?: string }) => {
+  create: async (data: { name: string; gender?: string; religion?: string; admissionNumber?: string; classId?: string; armId?: string }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
@@ -100,6 +100,7 @@ export const studentService = {
         admissionNumber: data.admissionNumber,
         classId: data.classId,
         armId: data.armId,
+        religion: data.religion || undefined,
         userId: user.id,
         schoolId: tenantId,
       },

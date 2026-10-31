@@ -21,6 +21,7 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export interface ExtractedStudent {
   name: string;
   gender?: string | null;
+  religion?: string | null;
   className?: string | null;
   admissionNumber?: string | null;
   dateOfBirth?: string | null;
@@ -37,10 +38,11 @@ Read EVERY student row and extract their details.
 Rules:
 - Recognize handwriting carefully; do not invent students not on the document.
 - If a field is blank or unreadable use null.
+- religion: "CHRISTIANITY"|"ISLAM"|"TRADITIONAL"|other religion if present, else null.
 - Set confidence "high" when the print/handwriting is clear, "medium" when slightly unclear, "low" when guessing.
 
 Respond with ONLY valid JSON (no markdown):
-{"students":[{"name":string,"gender":"MALE"|"FEMALE"|null,"className":string|null,"admissionNumber":string|null,"dateOfBirth":string|null,"parentName":string|null,"parentPhone":string|null,"parentEmail":string|null,"confidence":"high"|"medium"|"low"}]}`;
+{"students":[{"name":string,"gender":"MALE"|"FEMALE"|null,"religion":"CHRISTIANITY"|"ISLAM"|"TRADITIONAL"|string|null,"className":string|null,"admissionNumber":string|null,"dateOfBirth":string|null,"parentName":string|null,"parentPhone":string|null,"parentEmail":string|null,"confidence":"high"|"medium"|"low"}]}`;
 
 /** Parse a spreadsheet (CSV/XLSX) directly — no AI call. */
 export function parseSpreadsheet(buffer: Buffer): ExtractedStudent[] {
@@ -64,6 +66,7 @@ export function parseSpreadsheet(buffer: Buffer): ExtractedStudent[] {
   const nameIdx = findCol("name", "studentname", "fullname");
   if (nameIdx < 0) return [];
   const genderIdx = findCol("gender", "sex");
+  const religionIdx = findCol("religion");
   const classIdx = findCol("class", "classname");
   const admIdx = findCol("admission", "admno", "regno");
   const dobIdx = findCol("dob", "dateofbirth", "birthday");
@@ -84,6 +87,7 @@ export function parseSpreadsheet(buffer: Buffer): ExtractedStudent[] {
           ? "FEMALE"
           : null,
       className: classIdx >= 0 ? String(row[classIdx]).trim() || null : null,
+      religion: religionIdx >= 0 ? String(row[religionIdx]).trim() || null : null,
       admissionNumber: admIdx >= 0 ? String(row[admIdx]).trim() || null : null,
       dateOfBirth: dobIdx >= 0 ? String(row[dobIdx]).trim() || null : null,
       parentName: pNameIdx >= 0 ? String(row[pNameIdx]).trim() || null : null,
@@ -177,6 +181,7 @@ export async function extractFromImage(buffer: Buffer, mimeType: string) {
             name: String(s.name).trim(),
             gender:
               s.gender === "MALE" || s.gender === "FEMALE" ? s.gender : null,
+            religion: s.religion ? String(s.religion).trim() : null,
             className: s.className ? String(s.className).trim() : null,
             admissionNumber: s.admissionNumber
               ? String(s.admissionNumber).trim()
@@ -301,6 +306,7 @@ export async function registerApprovedStudents(
         studentService.create({
           name: rec.name,
           gender: rec.gender || undefined,
+          religion: rec.religion || undefined,
           admissionNumber: rec.admissionNumber || undefined,
           classId: classId || undefined,
         }),
