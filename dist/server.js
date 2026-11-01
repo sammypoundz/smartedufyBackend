@@ -41,6 +41,8 @@ const auditLogs_1 = __importDefault(require("./routes/auditLogs"));
 const questionDocRoutes_1 = __importDefault(require("./routes/questionDocRoutes"));
 const offlineRoutes_1 = __importDefault(require("./routes/offlineRoutes"));
 const aiScanRoutes_1 = __importDefault(require("./routes/aiScanRoutes"));
+const platformRoutes_1 = __importDefault(require("./routes/platformRoutes"));
+const platformOnboardingRoutes_1 = __importDefault(require("./routes/platformOnboardingRoutes"));
 // Import middleware
 const errorHandler_1 = require("./middleware/errorHandler");
 const auth_2 = require("./middleware/auth");
@@ -69,6 +71,13 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'SmartEdufy API is running' });
 });
 app.use('/api/auth', auth_1.default); // login, register, etc.
+// ---------- Super Admin console — SEPARATE auth realm ----------
+// Mounted BEFORE the global auth/tenant middleware: platform routes use their
+// own JWT realm (platformAuth) and platform users have no school tenant, so
+// they must not pass through authMiddleware (which demands a token on every
+// request) or tenantMiddleware (which demands an X-Tenant-ID header).
+app.use('/api/platform', platformRoutes_1.default);
+app.use('/api/platform/onboarding', platformOnboardingRoutes_1.default);
 // ---------- Global authentication & tenant middleware ----------
 app.use(auth_2.authMiddleware); // sets req.user
 app.use(tenant_1.tenantMiddleware); // sets tenant context & validates user belongs to tenant

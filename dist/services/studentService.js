@@ -103,6 +103,7 @@ exports.studentService = {
                 admissionNumber: data.admissionNumber,
                 classId: data.classId,
                 armId: data.armId,
+                religion: data.religion || undefined,
                 userId: user.id,
                 schoolId: tenantId,
             },

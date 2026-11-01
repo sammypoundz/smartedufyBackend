@@ -381,8 +381,20 @@ export async function registerApprovedStudents(
   });
   if (!batch || batch.schoolId !== schoolId)
     throw Object.assign(new Error("Batch not found"), { status: 404 });
-  if (batch.status === "COMPLETED")
-    throw Object.assign(new Error("Batch already completed"), { status: 400 });
+
+  // A COMPLETED batch may be re-run as long as it still has un-registered
+  // records (e.g. the admin registered one student, reviewed the rest and
+  // approved them afterwards). Only refuse when there is nothing left to do.
+  const hasUnprocessed = batch.records.some(
+    (r) => r.status === "PENDING" || r.status === "APPROVED",
+  );
+  if (!hasUnprocessed)
+    throw Object.assign(
+      new Error(
+        "No unprocessed records left in this batch — all students are already registered, duplicates or rejected.",
+      ),
+      { status: 400 },
+    );
 
   const approved = batch.records.filter((r) => r.status === "APPROVED");
   // Map class names to class IDs once, and each class to its "Arm A" arm
