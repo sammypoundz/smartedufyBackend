@@ -39,6 +39,7 @@ import offlineRoutes from './routes/offlineRoutes';
 import aiScanRoutes from './routes/aiScanRoutes';
 import platformRoutes from './routes/platformRoutes';
 import platformOnboardingRoutes from './routes/platformOnboardingRoutes';
+import tokenRoutes from './routes/tokenRoutes';
 
 
 // Import middleware
@@ -124,6 +125,7 @@ app.use('/api/audit-logs', auditLogRoutes);
 app.use('/api/question-docs', questionDocRoutes);
 app.use('/api/offline', offlineRoutes);
 app.use('/api/ai-scan', aiScanRoutes);
+app.use('/api/tokens', tokenRoutes);
 import timetableWorkflowRoutes from './routes/timetableWorkflowRoutes';
 import parentLinkRoutes from './routes/parentLinkRoutes';
 app.use('/api/timetable-workflow', timetableWorkflowRoutes);

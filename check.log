@@ -1,0 +1,7 @@
+C:/Users/gambo/smartedufy/backend/src/controllers/teacherController.ts:40 Property 'user' does not exist on type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+C:/Users/gambo/smartedufy/backend/src/controllers/teacherController.ts:42 Property 'user' does not exist on type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+C:/Users/gambo/smartedufy/backend/src/controllers/teacherController.ts:241 Property 'user' does not exist on type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+C:/Users/gambo/smartedufy/backend/src/routes/aiScanRoutes.ts:38 Property 'user' does not exist on type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+C:/Users/gambo/smartedufy/backend/src/routes/aiScanRoutes.ts:53 Property 'user' does not exist on type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+C:/Users/gambo/smartedufy/backend/src/routes/aiScanRoutes.ts:68 Property 'user' does not exist on type 'Request<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'.
+DIAG_COUNT 6

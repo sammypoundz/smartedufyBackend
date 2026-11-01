@@ -18,6 +18,9 @@ import {
 } from "../services/onboardingService";
 import { logAiUsage } from "../services/aiUsageService";
 import { logPlatformActivity } from "../services/platformAuditService";
+import { gateTokens } from "../services/tokenGate";
+import { tokenWalletService } from "../services/tokenWalletService";
+import { getTokenPrice } from "../services/platformSettingsService";
 
 const router = Router();
 
@@ -96,21 +99,57 @@ router.post(
             });
         }
       } else if (isImage) {
-        const result = await extractFromImage(file.buffer, file.mimetype);
-        extracted = result.students;
-        aiCostNgn = result.costUsd * 1600; // rough internal estimate; refine with settings rate
-        await logAiUsage({
-          schoolId: null, // platform-internal expense (billing rules: no wallet deduction)
-          userId: null,
-          operation: "ONBOARDING_EXTRACT",
-          model: result.model,
-          status: "SUCCESS",
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-          costUsd: result.costUsd,
-          costUsdEstimated: true,
-          processingMs: Date.now() - started,
-        });
+        // ---- Token gating: AI extraction consumes the school's tokens ----
+        // 1 token per student on the document (min 1) — estimated up-front from
+        // nothing, so we gate with a flat scan cost and charge by the actual
+        // number of students extracted.
+        const tokenPrice = await getTokenPrice();
+        const gate = await gateTokens(schoolId, 1, "ONBOARDING_EXTRACT");
+        let gateCharged = false;
+        try {
+          const result = await extractFromImage(file.buffer, file.mimetype);
+          extracted = result.students;
+          aiCostNgn = result.costUsd * tokenPrice;
+          await logAiUsage({
+            schoolId, // billed to the school's wallet, not the platform
+            userId: null,
+            operation: "ONBOARDING_EXTRACT",
+            model: result.model,
+            status: "SUCCESS",
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            costUsd: result.costUsd,
+            costUsdEstimated: true,
+            tokensCharged: Math.max(1, extracted.length),
+            revenueNgn: Math.max(1, extracted.length) * tokenPrice,
+            processingMs: Date.now() - started,
+          });
+          // Charge 1 token per extracted student (min 1) by releasing the flat
+          // reservation and charging the real amount under a fresh reference.
+          const actual = Math.max(1, extracted.length);
+          await tokenWalletService.release(schoolId, 1, gate.ref);
+          if (actual > 1) {
+            await tokenWalletService.reserve(schoolId, actual, gate.ref + "-x");
+          }
+          await tokenWalletService.charge(
+            schoolId,
+            actual,
+            actual > 1 ? gate.ref + "-x" : gate.ref,
+            { operation: "ONBOARDING_EXTRACT", students: extracted.length },
+          );
+          gateCharged = true;
+        } catch (err: any) {
+          if (!gateCharged) await gate.release();
+          await logAiUsage({
+            schoolId,
+            operation: "ONBOARDING_EXTRACT",
+            model: "gemini-flash",
+            status: "FAILED",
+            errorMessage: err.message,
+            processingMs: Date.now() - started,
+          });
+          throw err;
+        }
       } else {
         return res
           .status(400)
