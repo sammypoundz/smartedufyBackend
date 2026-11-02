@@ -430,6 +430,15 @@ router.get('/me', authMiddleware, async (req, res, next) => {
       },
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // The school's assigned subscription (stored by schoolId on Subscription).
+    const subscription = user.schoolId
+      ? await prisma.subscription.findUnique({
+          where: { schoolId: user.schoolId },
+          include: { plan: true },
+        })
+      : null;
+
     const profile = user.student || user.teacher || user.parent;
 
     // Resolve roles + effective privileges fresh from the DB so that role or
@@ -451,6 +460,22 @@ router.get('/me', authMiddleware, async (req, res, next) => {
       isActive: user.isActive,
       schoolId: user.schoolId,
       school: user.school,
+      // The school's assigned subscription plan — drives the school-facing
+      // billing view. STUDENT_BASED plans show price = snapshot × rate.
+      subscription: subscription
+        ? {
+            planName: subscription.plan.name,
+            planType: subscription.plan.type,
+            perStudentRate: subscription.plan.perStudentRate,
+            aiTokenAllowance: subscription.plan.aiTokenAllowance,
+            billingCycle: subscription.billingCycle,
+            pricePerCycle: subscription.pricePerCycle,
+            studentSnapshotCount: subscription.studentSnapshotCount,
+            status: subscription.status,
+            trial: subscription.trial,
+            endDate: subscription.endDate,
+          }
+        : null,
       profile,
     });
   } catch (err) {

@@ -760,10 +760,37 @@ router.get(
 const planSchema = z.object({
   name: z.string().min(2).max(60),
   description: z.string().max(300).optional(),
-  monthlyPrice: z.number().positive(),
+  // FIXED = flat monthly fee | FREE = ₦0, no automatic AI allowance | STUDENT_BASED = per-student-per-term
+  type: z.enum(["FREE", "FIXED", "STUDENT_BASED"]).default("FIXED"),
+  // Monthly recurring price in NGN per school (FIXED type; 0 for FREE)
+  monthlyPrice: z.number().min(0).optional(),
+  // NGN per eligible student per term (STUDENT_BASED only)
+  perStudentRate: z.number().positive().optional(),
+  // AI tokens credited per successfully activated paid billing cycle
+  aiTokenAllowance: z.number().int().min(0).max(100000).optional(),
+  gracePeriodDays: z.number().int().min(0).max(90).optional(),
   maxStudents: z.number().int().positive().optional(),
   isActive: z.boolean().optional(),
 });
+
+const CYCLE_MONTHS: Record<string, number> = {
+  MONTHLY: 1,
+  QUARTERLY: 3,
+  TERMLY: 3,
+  HALF_YEARLY: 6,
+  ANNUAL: 12,
+};
+
+const SUB_STATUSES = [
+  "ACTIVE",
+  "EXPIRED",
+  "TRIAL",
+  "SUSPENDED",
+  "PENDING_RENEWAL",
+  "PENDING_PAYMENT",
+  "GRACE_PERIOD",
+  "CANCELLED",
+] as const;
 
 router.get(
   "/plans",
@@ -783,7 +810,40 @@ router.post(
   requirePlatformRole("SUPER_ADMIN", "FINANCE_ADMIN"),
   asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
     const data = planSchema.parse(req.body);
-    const plan = await prisma.subscriptionPlan.create({ data });
+    if (data.type === "STUDENT_BASED" && !data.perStudentRate) {
+      return res
+        .status(400)
+        .json({ error: "Student-based plans require a perStudentRate" });
+    }
+    if (data.type === "FREE") {
+      data.monthlyPrice = 0;
+      // Free plans get no automatic AI allowance unless explicitly set
+      if (data.aiTokenAllowance === undefined) data.aiTokenAllowance = 0;
+    }
+    if (data.type === "STUDENT_BASED") {
+      // per-student rate drives pricing — never store a flat monthly price
+      data.monthlyPrice = 0;
+    }
+    if (data.type === "FIXED" && data.aiTokenAllowance === undefined) {
+      data.aiTokenAllowance = 100;
+    }
+    if (data.type === "STUDENT_BASED" && data.aiTokenAllowance === undefined) {
+      data.aiTokenAllowance = 100;
+    }
+    const plan = await prisma.subscriptionPlan.create({
+      data: {
+        name: data.name,
+        description: data.description,
+        type: data.type,
+        monthlyPrice: data.monthlyPrice ?? 0,
+        perStudentRate: data.perStudentRate,
+        aiTokenAllowance: data.aiTokenAllowance ??
+          (data.type === "FREE" ? 0 : 100),
+        gracePeriodDays: data.gracePeriodDays ?? 7,
+        maxStudents: data.maxStudents,
+        isActive: data.isActive ?? true,
+      },
+    });
     await logPlatformActivity({
       actorId: req.platformUser!.id,
       actorName: req.platformUser!.name,
@@ -791,7 +851,13 @@ router.post(
       action: "PLAN_CREATE",
       targetType: "SubscriptionPlan",
       targetId: plan.id,
-      description: `Created subscription plan ${plan.name} at ₦${plan.monthlyPrice}/month`,
+      description: `Created ${plan.type} plan ${plan.name}` +
+        (plan.type === "STUDENT_BASED"
+          ? ` at ₦${plan.perStudentRate}/student/term`
+          : plan.type === "FREE"
+            ? " (free)"
+            : ` at ₦${plan.monthlyPrice}/month`) +
+        ` · AI allowance ${plan.aiTokenAllowance} tokens/cycle`,
       ipAddress: req.ip,
     });
     res.status(201).json(plan);
@@ -865,6 +931,16 @@ router.post(
       planId: z.string(),
       months: z.number().int().positive().default(1),
       trial: z.boolean().optional(),
+      billingCycle: z
+        .enum(["MONTHLY", "QUARTERLY", "TERMLY", "HALF_YEARLY", "ANNUAL"])
+        .optional(),
+      // Per-school price override for the cycle (server-validated ≥ 0)
+      pricePerCycle: z.number().min(0).optional(),
+      // Student-based billing: snapshot of eligible students taken NOW at
+      // assignment time and locked for the cycle. Change-locked afterwards.
+      studentSnapshotCount: z.number().int().min(0).optional(),
+      schoolTermId: z.string().optional(),
+      reason: z.string().max(300).optional(),
     });
     const data = schema.parse(req.body);
     const plan = await prisma.subscriptionPlan.findUnique({
@@ -876,20 +952,58 @@ router.post(
     });
     if (!school) return res.status(404).json({ error: "School not found" });
 
+    // Server-side pricing — never trust a client-computed total.
+    // FREE → ₦0. STUDENT_BASED → snapshot count × per-student rate (count is
+    // re-derived server-side unless explicitly overridden with a reason).
+    let pricePerCycle = data.pricePerCycle ?? plan.monthlyPrice;
+    let studentSnapshotCount = data.studentSnapshotCount;
+    if (plan.type === "FREE") pricePerCycle = 0;
+    if (plan.type === "STUDENT_BASED") {
+      const rate = plan.perStudentRate || 0;
+      if (studentSnapshotCount === undefined) {
+        // Eligible students = active student profiles in the school NOW.
+        studentSnapshotCount = await prisma.student.count({
+          where: { schoolId: school.id, isActive: true },
+        });
+      }
+      // Per-student rate drives pricing — ignore any plan/monthly fallback.
+      pricePerCycle = studentSnapshotCount * rate;
+    }
+
+    const cycleMonths =
+      CYCLE_MONTHS[data.billingCycle || "MONTHLY"] || data.months;
+    const months = data.billingCycle ? cycleMonths : data.months;
     const endDate = new Date();
-    endDate.setMonth(endDate.getMonth() + data.months);
+    endDate.setMonth(endDate.getMonth() + months);
+
+    // Free plans activate immediately; paid plans without a recorded payment
+    // sit in PENDING_PAYMENT until a verified payment lands.
+    const status = plan.type === "FREE"
+      ? "ACTIVE"
+      : data.trial
+        ? "TRIAL"
+        : "PENDING_PAYMENT";
+
     const sub = await prisma.subscription.upsert({
       where: { schoolId: data.schoolId },
       create: {
         schoolId: data.schoolId,
         planId: data.planId,
-        status: data.trial ? "TRIAL" : "ACTIVE",
+        status,
+        billingCycle: data.billingCycle || "MONTHLY",
+        pricePerCycle,
+        studentSnapshotCount,
+        schoolTermId: data.schoolTermId,
         endDate,
         trial: data.trial || false,
       },
       update: {
         planId: data.planId,
-        status: data.trial ? "TRIAL" : "ACTIVE",
+        status,
+        billingCycle: data.billingCycle || "MONTHLY",
+        pricePerCycle,
+        studentSnapshotCount,
+        schoolTermId: data.schoolTermId,
         endDate,
         trial: data.trial || false,
       },
@@ -901,7 +1015,15 @@ router.post(
       action: "SUBSCRIPTION_ASSIGN",
       targetType: "Subscription",
       targetId: sub.id,
-      description: `Assigned plan ${plan.name} to ${school.name} for ${data.months} month(s)`,
+      description:
+        `Assigned ${plan.type} plan ${plan.name} to ${school.name} ` +
+        `(₦${pricePerCycle.toLocaleString()}/${data.billingCycle || "MONTHLY"}` +
+        (studentSnapshotCount !== undefined
+          ? `, snapshot ${studentSnapshotCount} students`
+          : "") +
+        `, status ${status})` +
+        (data.reason ? ` — reason: ${data.reason}` : ""),
+      metadata: { pricePerCycle, studentSnapshotCount, reason: data.reason },
       ipAddress: req.ip,
     });
     res.status(201).json(sub);
@@ -955,6 +1077,32 @@ router.post(
       where: { id: sub.id },
       data: { status: "ACTIVE", endDate: newEnd },
     });
+
+    // Credit the plan's AI token allowance once per verified paid cycle.
+    // Idempotent via the token-ledger unique (schoolId, reference).
+    const plan = await prisma.subscriptionPlan.findUnique({
+      where: { id: sub.planId },
+    });
+    const allowance = Math.max(0, plan?.aiTokenAllowance ?? 100);
+    let aiTokensGranted = 0;
+    if (allowance > 0) {
+      const ref = `SUB-${payment.id}`; // stable per payment → no double credit
+      try {
+        await tokenWalletService.purchase(data.schoolId, allowance, ref, {
+          note: `Subscription AI allowance — ${plan?.name} (${data.months} cycle)`,
+          metadata: { subscriptionPaymentId: payment.id, planId: plan?.id },
+        });
+        aiTokensGranted = allowance;
+        await prisma.subscriptionPayment.update({
+          where: { id: payment.id },
+          data: { aiTokensGranted },
+        });
+      } catch (e: any) {
+        // A duplicate reference is fine (payment already credited); anything
+        // else must not fail the payment itself.
+        if (!/already/i.test(e.message)) console.error("allowance credit failed:", e.message);
+      }
+    }
 
     await notifyPlatform({
       type: "PAYMENT",

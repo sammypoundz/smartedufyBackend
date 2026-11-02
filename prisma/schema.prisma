@@ -1005,8 +1005,15 @@ model SubscriptionPlan {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   name          String   @unique
   description   String?
-  // Monthly recurring price in NGN per school
+  // FIXED = flat fee per cycle | FREE = ₦0, no auto tokens | STUDENT_BASED = per-student-per-term
+  type          String   @default("FIXED")
+  // Monthly recurring price in NGN per school (FIXED type; 0 for FREE)
   monthlyPrice  Float
+  // NGN per eligible student per term (STUDENT_BASED type)
+  perStudentRate Float?
+  // AI tokens credited per successfully activated paid billing cycle
+  aiTokenAllowance Int   @default(100)
+  gracePeriodDays  Int   @default(7)
   isActive      Boolean  @default(true)
   maxStudents   Int?     // capacity cap enforced server-side
   createdAt     DateTime @default(now())
@@ -1027,6 +1034,11 @@ model Subscription {
   // ACTIVE | EXPIRED | TRIAL | SUSPENDED | PENDING_RENEWAL
   billingCycle  String   @default("MONTHLY")
   // MONTHLY | QUARTERLY | TERMLY | HALF_YEARLY | ANNUAL
+  // Price per cycle actually charged (allows per-school overrides of the plan price)
+  pricePerCycle Float?
+  // Term/year this cycle covers (STUDENT_BASED billing is tied to the school's term)
+  schoolTermId  String?  @db.ObjectId
+  studentSnapshotCount Int?
   startDate     DateTime @default(now())
   endDate       DateTime
   trial          Boolean @default(false)
@@ -1052,6 +1064,7 @@ model SubscriptionPayment {
   // TRANSFER | CARD | USSD | CASH | ADJUSTMENT
   reference      String?
   verified       Boolean  @default(true) // false = pending reconciliation
+  aiTokensGranted Int      @default(0)   // AI allowance credited on this verified payment
   paidAt         DateTime @default(now())
   note           String?
   createdAt      DateTime @default(now())
