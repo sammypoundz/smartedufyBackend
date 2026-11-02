@@ -771,6 +771,19 @@ const planSchema = z.object({
   gracePeriodDays: z.number().int().min(0).max(90).optional(),
   maxStudents: z.number().int().positive().optional(),
   isActive: z.boolean().optional(),
+  // Marketing copy shown to schools browsing available plans
+  tagline: z.string().max(160).optional(),
+  // Feature bullets: [{ label, comingSoon? }]
+  features: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(120),
+        comingSoon: z.boolean().optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
+  featured: z.boolean().optional(),
 });
 
 const CYCLE_MONTHS: Record<string, number> = {
@@ -842,6 +855,9 @@ router.post(
         gracePeriodDays: data.gracePeriodDays ?? 7,
         maxStudents: data.maxStudents,
         isActive: data.isActive ?? true,
+        tagline: data.tagline,
+        features: data.features ?? undefined,
+        featured: data.featured ?? false,
       },
     });
     await logPlatformActivity({
@@ -939,6 +955,9 @@ router.post(
       // Student-based billing: snapshot of eligible students taken NOW at
       // assignment time and locked for the cycle. Change-locked afterwards.
       studentSnapshotCount: z.number().int().min(0).optional(),
+      // Token override: super admin decides the bundled tokens at assign time.
+      // 0 = no bundled tokens (school tops up itself). Omitted = plan default.
+      aiTokenAllowance: z.number().int().min(0).max(100000).optional(),
       schoolTermId: z.string().optional(),
       reason: z.string().max(300).optional(),
     });
@@ -992,6 +1011,7 @@ router.post(
         status,
         billingCycle: data.billingCycle || "MONTHLY",
         pricePerCycle,
+        aiTokenAllowance: data.aiTokenAllowance, // null = plan default
         studentSnapshotCount,
         schoolTermId: data.schoolTermId,
         endDate,
@@ -1002,6 +1022,7 @@ router.post(
         status,
         billingCycle: data.billingCycle || "MONTHLY",
         pricePerCycle,
+        aiTokenAllowance: data.aiTokenAllowance, // null = plan default
         studentSnapshotCount,
         schoolTermId: data.schoolTermId,
         endDate,
@@ -1021,9 +1042,17 @@ router.post(
         (studentSnapshotCount !== undefined
           ? `, snapshot ${studentSnapshotCount} students`
           : "") +
+        (data.aiTokenAllowance !== undefined
+          ? `, tokens ${data.aiTokenAllowance}/cycle (override)`
+          : `, tokens plan-default ${plan.aiTokenAllowance}/cycle`) +
         `, status ${status})` +
         (data.reason ? ` — reason: ${data.reason}` : ""),
-      metadata: { pricePerCycle, studentSnapshotCount, reason: data.reason },
+      metadata: {
+        pricePerCycle,
+        studentSnapshotCount,
+        aiTokenAllowance: data.aiTokenAllowance ?? plan.aiTokenAllowance,
+        reason: data.reason,
+      },
       ipAddress: req.ip,
     });
     res.status(201).json(sub);
@@ -1079,11 +1108,16 @@ router.post(
     });
 
     // Credit the plan's AI token allowance once per verified paid cycle.
+    // Honors a per-assignment token override set by the super admin at assign
+    // time (0 = no bundled tokens); falls back to the plan's default.
     // Idempotent via the token-ledger unique (schoolId, reference).
     const plan = await prisma.subscriptionPlan.findUnique({
       where: { id: sub.planId },
     });
-    const allowance = Math.max(0, plan?.aiTokenAllowance ?? 100);
+    const allowance = Math.max(
+      0,
+      sub.aiTokenAllowance ?? plan?.aiTokenAllowance ?? 100,
+    );
     let aiTokensGranted = 0;
     if (allowance > 0) {
       const ref = `SUB-${payment.id}`; // stable per payment → no double credit

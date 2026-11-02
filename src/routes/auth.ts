@@ -439,6 +439,12 @@ router.get('/me', authMiddleware, async (req, res, next) => {
         })
       : null;
 
+    // Effective bundled tokens: per-assignment override if the super admin set
+    // one at assign time, otherwise the plan's default allowance.
+    const effectiveTokenAllowance = subscription
+      ? (subscription.aiTokenAllowance ?? subscription.plan.aiTokenAllowance)
+      : 0;
+
     const profile = user.student || user.teacher || user.parent;
 
     // Resolve roles + effective privileges fresh from the DB so that role or
@@ -467,7 +473,9 @@ router.get('/me', authMiddleware, async (req, res, next) => {
             planName: subscription.plan.name,
             planType: subscription.plan.type,
             perStudentRate: subscription.plan.perStudentRate,
-            aiTokenAllowance: subscription.plan.aiTokenAllowance,
+            // Effective bundled tokens: assignment override ?? plan default
+            aiTokenAllowance: effectiveTokenAllowance,
+            tokenIsOverride: subscription.aiTokenAllowance != null,
             billingCycle: subscription.billingCycle,
             pricePerCycle: subscription.pricePerCycle,
             studentSnapshotCount: subscription.studentSnapshotCount,
@@ -478,6 +486,35 @@ router.get('/me', authMiddleware, async (req, res, next) => {
         : null,
       profile,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Public-ish plans catalogue for the signed-in school (admin/teacher portal):
+// shows every ACTIVE plan so the school can see what it is on and what it
+// could switch/upgrade to. Marketing-safe fields only.
+router.get('/plans', authMiddleware, async (req, res, next) => {
+  try {
+    const plans = await prisma.subscriptionPlan.findMany({
+      where: { isActive: true },
+      orderBy: [{ monthlyPrice: 'asc' }, { createdAt: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        tagline: true,
+        type: true,
+        monthlyPrice: true,
+        perStudentRate: true,
+        aiTokenAllowance: true,
+        maxStudents: true,
+        features: true,
+        featured: true,
+        gracePeriodDays: true,
+      },
+    });
+    res.json({ plans });
   } catch (err) {
     next(err);
   }

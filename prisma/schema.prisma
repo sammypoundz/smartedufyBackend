@@ -1016,6 +1016,10 @@ model SubscriptionPlan {
   gracePeriodDays  Int   @default(7)
   isActive      Boolean  @default(true)
   maxStudents   Int?     // capacity cap enforced server-side
+  // Marketing copy shown to schools browsing available plans
+  tagline       String?
+  features      Json?    // [{ label: string, comingSoon?: boolean }]
+  featured      Boolean  @default(false) // shown as "Recommended"
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -1036,6 +1040,10 @@ model Subscription {
   // MONTHLY | QUARTERLY | TERMLY | HALF_YEARLY | ANNUAL
   // Price per cycle actually charged (allows per-school overrides of the plan price)
   pricePerCycle Float?
+  // Per-assignment token override. null = use the plan's default allowance.
+  // Lets the super admin decide the bundled tokens (or zero) at assign time,
+  // independent of the plan's own default.
+  aiTokenAllowance Int?
   // Term/year this cycle covers (STUDENT_BASED billing is tied to the school's term)
   schoolTermId  String?  @db.ObjectId
   studentSnapshotCount Int?
