@@ -817,66 +817,34 @@ router.get(
   }),
 );
 
+// ---- Canonical billing plans: exactly TWO billing types exist.
+// The super admin edits these; creating/deleting billing plans is disabled.
+const CANONICAL_PLAN_NAMES = ["Pay Per Student", "Subscription"];
+
+router.get(
+  "/plans",
+  auth,
+  asyncRoute(async (_req, res) => {
+    res.json(
+      await prisma.subscriptionPlan.findMany({
+        orderBy: { monthlyPrice: "asc" },
+      }),
+    );
+  }),
+);
+
+// DISABLED: billing plan creation. The product ships with exactly two
+// canonical billing types (Pay Per Student + Subscription) — see
+// prisma/seedBillingPlans.ts. Editing their pricing/copy is done via PUT.
 router.post(
   "/plans",
   auth,
   requirePlatformRole("SUPER_ADMIN", "FINANCE_ADMIN"),
-  asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
-    const data = planSchema.parse(req.body);
-    if (data.type === "STUDENT_BASED" && !data.perStudentRate) {
-      return res
-        .status(400)
-        .json({ error: "Student-based plans require a perStudentRate" });
-    }
-    if (data.type === "FREE") {
-      data.monthlyPrice = 0;
-      // Free plans get no automatic AI allowance unless explicitly set
-      if (data.aiTokenAllowance === undefined) data.aiTokenAllowance = 0;
-    }
-    if (data.type === "STUDENT_BASED") {
-      // per-student rate drives pricing — never store a flat monthly price
-      data.monthlyPrice = 0;
-    }
-    if (data.type === "FIXED" && data.aiTokenAllowance === undefined) {
-      data.aiTokenAllowance = 100;
-    }
-    if (data.type === "STUDENT_BASED" && data.aiTokenAllowance === undefined) {
-      data.aiTokenAllowance = 100;
-    }
-    const plan = await prisma.subscriptionPlan.create({
-      data: {
-        name: data.name,
-        description: data.description,
-        type: data.type,
-        monthlyPrice: data.monthlyPrice ?? 0,
-        perStudentRate: data.perStudentRate,
-        aiTokenAllowance: data.aiTokenAllowance ??
-          (data.type === "FREE" ? 0 : 100),
-        gracePeriodDays: data.gracePeriodDays ?? 7,
-        maxStudents: data.maxStudents,
-        isActive: data.isActive ?? true,
-        tagline: data.tagline,
-        features: data.features ?? undefined,
-        featured: data.featured ?? false,
-      },
+  asyncRoute(async (_req, res) => {
+    res.status(403).json({
+      error:
+        "Billing plans cannot be created. Only the two canonical billing types (Pay Per Student, Subscription) exist — edit them instead.",
     });
-    await logPlatformActivity({
-      actorId: req.platformUser!.id,
-      actorName: req.platformUser!.name,
-      actorRole: req.platformUser!.role,
-      action: "PLAN_CREATE",
-      targetType: "SubscriptionPlan",
-      targetId: plan.id,
-      description: `Created ${plan.type} plan ${plan.name}` +
-        (plan.type === "STUDENT_BASED"
-          ? ` at ₦${plan.perStudentRate}/student/term`
-          : plan.type === "FREE"
-            ? " (free)"
-            : ` at ₦${plan.monthlyPrice}/month`) +
-        ` · AI allowance ${plan.aiTokenAllowance} tokens/cycle`,
-      ipAddress: req.ip,
-    });
-    res.status(201).json(plan);
   }),
 );
 
@@ -886,6 +854,9 @@ router.put(
   requirePlatformRole("SUPER_ADMIN", "FINANCE_ADMIN"),
   asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
     const data = planSchema.partial().parse(req.body);
+    // Never allow changing the billing type or name of a canonical plan.
+    delete (data as any).type;
+    delete (data as any).name;
     const plan = await prisma.subscriptionPlan.update({
       where: { id: String(req.params.id) },
       data,
@@ -897,7 +868,13 @@ router.put(
       action: "PLAN_UPDATE",
       targetType: "SubscriptionPlan",
       targetId: plan.id,
-      description: `Updated subscription plan ${plan.name}`,
+      description: `Updated ${plan.type} billing plan ${plan.name}` +
+        (plan.type === "STUDENT_BASED"
+          ? plan.perStudentRate != null
+            ? ` at ₦${plan.perStudentRate}/student/term`
+            : ""
+          : ` at ₦${plan.monthlyPrice}/month`) +
+        ` · AI allowance ${plan.aiTokenAllowance} tokens/cycle`,
       metadata: data,
       ipAddress: req.ip,
     });
