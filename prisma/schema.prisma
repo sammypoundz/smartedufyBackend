@@ -18,49 +18,49 @@ model School {
   updatedAt DateTime @updatedAt
 
   // Relations
-  users              User[]
-  roles              RoleDef[]
-  students           Student[]
-  teachers           Teacher[]
-  parents            Parent[]
-  parentStudentLinks ParentStudentLink[]
-  classes            Class[]
-  arms               Arm[]
-  subjects           Subject[]
-  subjectTeachers    SubjectTeacher[]
-  subjectArms        SubjectArm[]
-  studentSubjects    StudentSubject[]
-  skills             Skill[]
-  armSkills          ArmSkill[]
-  subjectSkills      SubjectSkill[]
-  attendances        Attendance[]
-  timetableEntries   TimetableEntry[]
-  results            Result[]
+  users                     User[]
+  roles                     RoleDef[]
+  students                  Student[]
+  teachers                  Teacher[]
+  parents                   Parent[]
+  parentStudentLinks        ParentStudentLink[]
+  classes                   Class[]
+  arms                      Arm[]
+  subjects                  Subject[]
+  subjectTeachers           SubjectTeacher[]
+  subjectArms               SubjectArm[]
+  studentSubjects           StudentSubject[]
+  skills                    Skill[]
+  armSkills                 ArmSkill[]
+  subjectSkills             SubjectSkill[]
+  attendances               Attendance[]
+  timetableEntries          TimetableEntry[]
+  results                   Result[]
   teacherSubjectAssignments TeacherSubjectAssignment[]
   teacherSlotPreferences    TeacherSlotPreference[]
   timetableReviews          TimetableReview[]
-  gradingScales      GradingScale[]
-  gradingScaleGroups GradingScaleGroup[]
-  assessmentFormats  AssessmentFormat[]
-  topics             Topic[]
-  lessonPlans        LessonPlan[]
-  feeStructures      FeeStructure[]
-  feePayments        FeePayment[]
-  studentFees        StudentFee[]
-  messages           Message[]
-  expenses           Expense[]
-  budgets            Budget[]
-  payrolls           Payroll[]
-  tests              Test[]
-  questions          Question[]
-  testAttempts       TestAttempt[]
-  academicYears      AcademicYear[]
-  terms              Term[]
-  promotionHistories StudentPromotionHistory[]
-  inventoryItems     InventoryItem[]
+  gradingScales             GradingScale[]
+  gradingScaleGroups        GradingScaleGroup[]
+  assessmentFormats         AssessmentFormat[]
+  topics                    Topic[]
+  lessonPlans               LessonPlan[]
+  feeStructures             FeeStructure[]
+  feePayments               FeePayment[]
+  studentFees               StudentFee[]
+  messages                  Message[]
+  expenses                  Expense[]
+  budgets                   Budget[]
+  payrolls                  Payroll[]
+  tests                     Test[]
+  questions                 Question[]
+  testAttempts              TestAttempt[]
+  academicYears             AcademicYear[]
+  terms                     Term[]
+  promotionHistories        StudentPromotionHistory[]
+  inventoryItems            InventoryItem[]
 
-  auditLogs           AuditLog[]
-  questionDocs        QuestionDoc[]
+  auditLogs    AuditLog[]
+  questionDocs QuestionDoc[]
 
   // NEW: Settings models
   promotionRules      PromotionRule[]
@@ -93,12 +93,12 @@ model User {
   parent         Parent?
   teacher        Teacher?
   payrollEntries Payroll[]
-  messagesSent   Message[] @relation("sender")
+  messagesSent   Message[]     @relation("sender")
   auditLogs      AuditLog[]
   questionDocs   QuestionDoc[]
 
-  @@map("users")
   @@index([schoolId, userIdCode])
+  @@map("users")
 }
 
 // ========== STUDENT ==========
@@ -149,32 +149,32 @@ model Parent {
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId
 
-  children      Student[]
-  linkRequests  ParentStudentLink[]
+  children     Student[]
+  linkRequests ParentStudentLink[]
 }
 
 // ========== PARENT–STUDENT LINK REQUESTS (mirrors Timetable workflow states) ==========
 // Parents request to link a student to their account; admins approve/reject.
 // Status flow: PENDING_REVIEW -> APPROVED | REJECTED | CHANGES_REQUESTED
 model ParentStudentLink {
-  id             String    @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String    @db.ObjectId
-  school         School    @relation(fields: [schoolId], references: [id])
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId String @db.ObjectId
+  school   School @relation(fields: [schoolId], references: [id])
 
-  parentId       String    @db.ObjectId
-  parent         Parent    @relation(fields: [parentId], references: [id])
+  parentId String @db.ObjectId
+  parent   Parent @relation(fields: [parentId], references: [id])
 
-  studentId      String    @db.ObjectId
-  student        Student   @relation(fields: [studentId], references: [id])
+  studentId String  @db.ObjectId
+  student   Student @relation(fields: [studentId], references: [id])
 
-  status         String    @default("PENDING_REVIEW") // PENDING_REVIEW | APPROVED | REJECTED | CHANGES_REQUESTED
-  requestedName  String?   // name as the parent typed it (audit aid)
-  parentNote     String?   // message from the parent
-  reviewNote     String?   // admin's note on reject / changes requested
-  reviewedBy     String?   @db.ObjectId // admin user id
-  reviewedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  status        String    @default("PENDING_REVIEW") // PENDING_REVIEW | APPROVED | REJECTED | CHANGES_REQUESTED
+  requestedName String? // name as the parent typed it (audit aid)
+  parentNote    String? // message from the parent
+  reviewNote    String? // admin's note on reject / changes requested
+  reviewedBy    String?   @db.ObjectId // admin user id
+  reviewedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([parentId])
   @@index([studentId])
@@ -183,27 +183,27 @@ model ParentStudentLink {
 
 // ========== TEACHER ==========
 model Teacher {
-  id       String  @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId String  @db.ObjectId
-  school   School  @relation(fields: [schoolId], references: [id])
-  name     String
-  phone    String?
-  email    String  @unique
-  gender   String? // MALE | FEMALE | OTHER (collected at registration)
-  isActive Boolean @default(true)
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String   @db.ObjectId
+  school    School   @relation(fields: [schoolId], references: [id])
+  name      String
+  phone     String?
+  email     String   @unique
+  gender    String? // MALE | FEMALE | OTHER (collected at registration)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now()) // backfilled at server start for pre-existing rows
 
   // Self-service profile setup (filled by the teacher after registration)
-  teacherType     String? // SUBJECT_TEACHER | FORM_TEACHER | BOTH
-  briefSubjects   Json?   // { subjects: ["Mathematics"], classes: ["JSS 1 Gold"] }
-  registrationStatus String @default("APPROVED") // PENDING | APPROVED | REJECTED (self-registered teachers start PENDING)
+  teacherType        String? // SUBJECT_TEACHER | FORM_TEACHER | BOTH
+  briefSubjects      Json? // { subjects: ["Mathematics"], classes: ["JSS 1 Gold"] }
+  registrationStatus String  @default("APPROVED") // PENDING | APPROVED | REJECTED (self-registered teachers start PENDING)
 
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique @db.ObjectId
 
-  subjects    SubjectTeacher[]
-  arms        Arm[]
-  subjectArms SubjectArm[]
+  subjects             SubjectTeacher[]
+  arms                 Arm[]
+  subjectArms          SubjectArm[]
   timetableAssignments TeacherSubjectAssignment[]
 }
 
@@ -214,15 +214,15 @@ model Class {
   school   School @relation(fields: [schoolId], references: [id])
   name     String
 
-  arms        Arm[]
-  students    Student[]
+  arms                Arm[]
+  students            Student[]
   fromClassPromotions StudentPromotionHistory[] @relation("FromClassPromotions")
   toClassPromotions   StudentPromotionHistory[] @relation("ToClassPromotions")
-  lessonPlans LessonPlan[]
-  tests       Test[]
+  lessonPlans         LessonPlan[]
+  tests               Test[]
 
-  gradingScaleGroupId String?             @db.ObjectId
-  gradingScaleGroup   GradingScaleGroup?  @relation(fields: [gradingScaleGroupId], references: [id])
+  gradingScaleGroupId String?            @db.ObjectId
+  gradingScaleGroup   GradingScaleGroup? @relation(fields: [gradingScaleGroupId], references: [id])
 }
 
 // ========== ARM ==========
@@ -243,18 +243,18 @@ model Arm {
   // non-instructional: no subject entries may exist on them.
   timeSlots String[] @default([])
 
-  students       Student[]
-  subjects       SubjectArm[]
-  timetable      TimetableEntry[]
+  students           Student[]
+  subjects           SubjectArm[]
+  timetable          TimetableEntry[]
   teacherAssignments TeacherSubjectAssignment[]
   timetableReview    TimetableReview?
-  skills         ArmSkill[]
-  topics         Topic[]
-  lessonPlans    LessonPlan[]
-  results        Result[]
-  fromPromotions StudentPromotionHistory[] @relation("fromArm")
-  toPromotions   StudentPromotionHistory[] @relation("toArm")
-  tests          Test[]
+  skills             ArmSkill[]
+  topics             Topic[]
+  lessonPlans        LessonPlan[]
+  results            Result[]
+  fromPromotions     StudentPromotionHistory[]  @relation("fromArm")
+  toPromotions       StudentPromotionHistory[]  @relation("toArm")
+  tests              Test[]
 }
 
 // ========== SUBJECT ==========
@@ -267,16 +267,16 @@ model Subject {
   createdAt   DateTime? @default(now())
   updatedAt   DateTime? @updatedAt
 
-  teachers        SubjectTeacher[]
-  arms            SubjectArm[]
-  timetable       TimetableEntry[]
+  teachers           SubjectTeacher[]
+  arms               SubjectArm[]
+  timetable          TimetableEntry[]
   teacherAssignments TeacherSubjectAssignment[]
-  results         Result[]
-  studentSubjects StudentSubject[]
-  topics          Topic[]
-  skills          SubjectSkill[]
-  lessonPlans     LessonPlan[]
-  questions       Question[]
+  results            Result[]
+  studentSubjects    StudentSubject[]
+  topics             Topic[]
+  skills             SubjectSkill[]
+  lessonPlans        LessonPlan[]
+  questions          Question[]
 }
 
 // ========== TIMETABLE WORKFLOW ==========
@@ -284,20 +284,20 @@ model Subject {
 // Step 1 — Admin assigns each subject-arm to a teacher with allowed teaching
 // days and the number of periods required per week.
 model TeacherSubjectAssignment {
-  id             String  @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String  @db.ObjectId
-  school         School  @relation(fields: [schoolId], references: [id])
-  subjectId      String  @db.ObjectId
-  armId          String  @db.ObjectId
-  teacherId      String  @db.ObjectId
-  allowedDays    String[]             // e.g. ["Monday", "Wednesday"]
-  periodsPerWeek Int     @default(1)
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String    @db.ObjectId
+  school         School    @relation(fields: [schoolId], references: [id])
+  subjectId      String    @db.ObjectId
+  armId          String    @db.ObjectId
+  teacherId      String    @db.ObjectId
+  allowedDays    String[] // e.g. ["Monday", "Wednesday"]
+  periodsPerWeek Int       @default(1)
   createdAt      DateTime? @default(now())
 
-  teacher   Teacher @relation(fields: [teacherId], references: [id])
-  subject   Subject @relation(fields: [subjectId], references: [id])
-  arm       Arm     @relation(fields: [armId], references: [id])
-  slots     TeacherSlotPreference[]
+  teacher Teacher                 @relation(fields: [teacherId], references: [id])
+  subject Subject                 @relation(fields: [subjectId], references: [id])
+  arm     Arm                     @relation(fields: [armId], references: [id])
+  slots   TeacherSlotPreference[]
 
   @@unique([schoolId, subjectId, armId])
 }
@@ -306,10 +306,10 @@ model TeacherSubjectAssignment {
 // Uniqueness on (assignment, day, slot) prevents double-picking their own
 // slots; cross-assignment conflicts are validated in the API.
 model TeacherSlotPreference {
-  id           String  @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId     String  @db.ObjectId
-  school       School  @relation(fields: [schoolId], references: [id])
-  assignmentId String  @db.ObjectId
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId     String    @db.ObjectId
+  school       School    @relation(fields: [schoolId], references: [id])
+  assignmentId String    @db.ObjectId
   dayOfWeek    String
   timeSlot     String
   createdAt    DateTime? @default(now())
@@ -321,17 +321,17 @@ model TeacherSlotPreference {
 
 // Step 5/6 — Review/lock state of the timetable workflow for one arm.
 model TimetableReview {
-  id             String    @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String    @db.ObjectId
-  school         School    @relation(fields: [schoolId], references: [id])
-  armId          String    @db.ObjectId
-  status         String    @default("DRAFT") // DRAFT | PENDING_REVIEW | CHANGES_REQUESTED | APPROVED
-  reviewNote     String?
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId         String    @db.ObjectId
+  school           School    @relation(fields: [schoolId], references: [id])
+  armId            String    @db.ObjectId
+  status           String    @default("DRAFT") // DRAFT | PENDING_REVIEW | CHANGES_REQUESTED | APPROVED
+  reviewNote       String?
   requestedChanges String?
-  reviewedBy     String?   @db.ObjectId
-  reviewedAt     DateTime?
-  lockedAt       DateTime? // set when status becomes APPROVED
-  createdAt      DateTime? @default(now())
+  reviewedBy       String?   @db.ObjectId
+  reviewedAt       DateTime?
+  lockedAt         DateTime? // set when status becomes APPROVED
+  createdAt        DateTime? @default(now())
 
   arm Arm @relation(fields: [armId], references: [id])
 
@@ -438,13 +438,13 @@ model Attendance {
 
 // ========== TIMETABLE ENTRY ==========
 model TimetableEntry {
-  id        String  @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String  @db.ObjectId
-  school    School  @relation(fields: [schoolId], references: [id])
-  armId     String  @db.ObjectId
-  dayOfWeek String
-  timeSlot  String
-  subjectId String? @db.ObjectId
+  id                 String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId           String  @db.ObjectId
+  school             School  @relation(fields: [schoolId], references: [id])
+  armId              String  @db.ObjectId
+  dayOfWeek          String
+  timeSlot           String
+  subjectId          String? @db.ObjectId
   linkedAssignmentId String? @db.ObjectId // TeacherSubjectAssignment this entry was compiled from
 
   arm     Arm      @relation(fields: [armId], references: [id])
@@ -463,9 +463,9 @@ model Result {
   armId          String   @db.ObjectId
   term           String
   ca             Int // total CA = ca1 + ca2 + ca3 (kept for broadsheet/report compatibility)
-  ca1            Int    @default(0) // First CA
-  ca2            Int    @default(0) // Second CA
-  ca3            Int    @default(0) // Third CA
+  ca1            Int      @default(0) // First CA
+  ca2            Int      @default(0) // Second CA
+  ca3            Int      @default(0) // Third CA
   exam           Int
   total          Int
   score          Int
@@ -502,18 +502,18 @@ model GradingScaleGroup {
 
 // ========== GRADING SCALE ==========
 model GradingScale {
-  id        String              @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId  String              @db.ObjectId
-  school    School              @relation(fields: [schoolId], references: [id])
-  groupId   String?             @db.ObjectId
-  group     GradingScaleGroup?  @relation(fields: [groupId], references: [id])
+  id        String             @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String             @db.ObjectId
+  school    School             @relation(fields: [schoolId], references: [id])
+  groupId   String?            @db.ObjectId
+  group     GradingScaleGroup? @relation(fields: [groupId], references: [id])
   minScore  Int
   maxScore  Int
   grade     String
   points    Float?
-  isDefault Boolean             @default(false)
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+  isDefault Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
 }
 
 // ========== ASSESSMENT FORMAT ==========
@@ -858,15 +858,15 @@ model ReportCardTemplate {
 // {YEAR} = 4-digit year, {ROLE} = role name. Concurrency-safe: the counter
 // is advanced inside a transaction with a read-your-write upsert.
 model IdGeneratorConfig {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String   @db.ObjectId
-  school         School   @relation(fields: [schoolId], references: [id])
-  role           String   // STUDENT | TEACHER | PARENT | ADMIN | PRINCIPAL | ...
-  format         String   @default("{ROLE}-{####}") // e.g. STU-{YEAR}-{####}
-  counter        Int      @default(0) // last used number for this role
-  lastResetYear  Int?     // year of last {YEAR}-counter reset (yearly reset support)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId      String   @db.ObjectId
+  school        School   @relation(fields: [schoolId], references: [id])
+  role          String // STUDENT | TEACHER | PARENT | ADMIN | PRINCIPAL | ...
+  format        String   @default("{ROLE}-{####}") // e.g. STU-{YEAR}-{####}
+  counter       Int      @default(0) // last used number for this role
+  lastResetYear Int? // year of last {YEAR}-counter reset (yearly reset support)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@unique([schoolId, role])
   @@map("id_generator_configs")
@@ -933,27 +933,27 @@ enum QuestionDocStatus {
 }
 
 model QuestionDoc {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String   @db.ObjectId
-  school      School   @relation(fields: [schoolId], references: [id])
-  teacherId   String   @db.ObjectId // User.id of the uploading teacher
-  teacher     User     @relation(fields: [teacherId], references: [id])
+  id          String            @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String            @db.ObjectId
+  school      School            @relation(fields: [schoolId], references: [id])
+  teacherId   String            @db.ObjectId // User.id of the uploading teacher
+  teacher     User              @relation(fields: [teacherId], references: [id])
   title       String
   description String?
   subjectName String?
   className   String?
-  armName     String?  // arm (e.g. JSS 2A) chosen for the class
+  armName     String? // arm (e.g. JSS 2A) chosen for the class
   term        String?
   fileUrl     String
   fileName    String
   fileType    String
   fileSize    Int?
   status      QuestionDocStatus @default(PENDING)
-  reviewNote  String?  // admin feedback on approval / rejection
-  reviewedBy  String?  @db.ObjectId // User.id of reviewing admin
+  reviewNote  String? // admin feedback on approval / rejection
+  reviewedBy  String?           @db.ObjectId // User.id of reviewing admin
   reviewedAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 }
 
 // ========== SUPER ADMIN PLATFORM MODELS ==========
@@ -964,18 +964,18 @@ model QuestionDoc {
 
 // ---- Platform console users (NOT school tenants) ----
 model PlatformUser {
-  id            String   @id @default(auto()) @map("_id") @db.ObjectId
-  name          String
-  email         String   @unique
-  password      String
-  role          String   @default("ANALYTICS_VIEWER")
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  email       String    @unique
+  password    String
+  role        String    @default("ANALYTICS_VIEWER")
   // SUPER_ADMIN | FINANCE_ADMIN | ONBOARDING_OFFICER | SUPPORT_OFFICER | ANALYTICS_VIEWER
-  isActive      Boolean  @default(true)
-  mfaEnabled    Boolean  @default(false)
-  mfaSecret     String?
-  lastLoginAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isActive    Boolean   @default(true)
+  mfaEnabled  Boolean   @default(false)
+  mfaSecret   String?
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@map("platform_users")
 }
@@ -986,8 +986,8 @@ model PlatformAuditLog {
   actorId     String   @db.ObjectId // PlatformUser id
   actorName   String?
   actorRole   String?
-  action      String   // e.g. SCHOOL_SUSPEND, WALLET_ADJUST, PLAN_CREATE, LOGIN
-  targetType  String?  // e.g. School, Wallet, Subscription
+  action      String // e.g. SCHOOL_SUSPEND, WALLET_ADJUST, PLAN_CREATE, LOGIN
+  targetType  String? // e.g. School, Wallet, Subscription
   targetId    String?
   description String
   metadata    Json?
@@ -1002,59 +1002,60 @@ model PlatformAuditLog {
 
 // ---- Subscription plans (platform-level, no schoolId) ----
 model SubscriptionPlan {
-  id            String   @id @default(auto()) @map("_id") @db.ObjectId
-  name          String   @unique
-  description   String?
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  name             String   @unique
+  description      String?
   // FIXED = flat fee per cycle | FREE = ₦0, no auto tokens | STUDENT_BASED = per-student-per-term
-  type          String   @default("FIXED")
+  type             String   @default("FIXED")
   // Monthly recurring price in NGN per school (FIXED type; 0 for FREE)
-  monthlyPrice  Float
+  monthlyPrice     Float
   // NGN per eligible student per term (STUDENT_BASED type)
-  perStudentRate Float?
+  perStudentRate   Float?
   // AI tokens credited per successfully activated paid billing cycle
-  aiTokenAllowance Int   @default(100)
-  gracePeriodDays  Int   @default(7)
-  isActive      Boolean  @default(true)
-  maxStudents   Int?     // capacity cap enforced server-side
+  aiTokenAllowance Int      @default(100)
+  gracePeriodDays  Int      @default(7)
+  isActive         Boolean  @default(true)
+  maxStudents      Int? // capacity cap enforced server-side
   // Marketing copy shown to schools browsing available plans
-  tagline       String?
-  features      Json?    // [{ label: string, comingSoon?: boolean }]
-  featured      Boolean  @default(false) // shown as "Recommended"
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  tagline          String?
+  features         Json? // [{ label: string, comingSoon?: boolean }]
+  featured         Boolean  @default(false) // shown as "Recommended"
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  subscriptions Subscription[]
+  subscriptions  Subscription[]
+  priceOverrides PlanPriceOverride[]
 
   @@map("subscription_plans")
 }
 
 // ---- School subscriptions ----
 model Subscription {
-  id            String             @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId      String   @db.ObjectId
-  planId        String   @db.ObjectId
-  plan          SubscriptionPlan @relation(fields: [planId], references: [id])
-  status        String   @default("ACTIVE")
+  id                   String           @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId             String           @db.ObjectId
+  planId               String           @db.ObjectId
+  plan                 SubscriptionPlan @relation(fields: [planId], references: [id])
+  status               String           @default("ACTIVE")
   // ACTIVE | EXPIRED | TRIAL | SUSPENDED | PENDING_RENEWAL
-  billingCycle  String   @default("MONTHLY")
+  billingCycle         String           @default("MONTHLY")
   // MONTHLY | QUARTERLY | TERMLY | HALF_YEARLY | ANNUAL
   // Price per cycle actually charged (allows per-school overrides of the plan price)
-  pricePerCycle Float?
+  pricePerCycle        Float?
   // Per-assignment token override. null = use the plan's default allowance.
   // Lets the super admin decide the bundled tokens (or zero) at assign time,
   // independent of the plan's own default.
-  aiTokenAllowance Int?
+  aiTokenAllowance     Int?
   // Term/year this cycle covers (STUDENT_BASED billing is tied to the school's term)
-  schoolTermId  String?  @db.ObjectId
+  schoolTermId         String?          @db.ObjectId
   studentSnapshotCount Int?
-  startDate     DateTime @default(now())
-  endDate       DateTime
-  trial          Boolean @default(false)
+  startDate            DateTime         @default(now())
+  endDate              DateTime
+  trial                Boolean          @default(false)
   // Cycle lengths in months for computing end dates from payments
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
-  payments      SubscriptionPayment[]
+  payments SubscriptionPayment[]
 
   @@unique([schoolId])
   @@index([status, endDate])
@@ -1063,19 +1064,19 @@ model Subscription {
 
 // ---- Verified subscription payments (the only revenue source for subs) ----
 model SubscriptionPayment {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String   @db.ObjectId
-  subscriptionId String   @db.ObjectId
-  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
-  amount         Float
-  method         String   @default("TRANSFER")
+  id              String       @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId        String       @db.ObjectId
+  subscriptionId  String       @db.ObjectId
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id])
+  amount          Float
+  method          String       @default("TRANSFER")
   // TRANSFER | CARD | USSD | CASH | ADJUSTMENT
-  reference      String?
-  verified       Boolean  @default(true) // false = pending reconciliation
-  aiTokensGranted Int      @default(0)   // AI allowance credited on this verified payment
-  paidAt         DateTime @default(now())
-  note           String?
-  createdAt      DateTime @default(now())
+  reference       String?
+  verified        Boolean      @default(true) // false = pending reconciliation
+  aiTokensGranted Int          @default(0) // AI allowance credited on this verified payment
+  paidAt          DateTime     @default(now())
+  note            String?
+  createdAt       DateTime     @default(now())
 
   @@index([schoolId, paidAt])
   @@index([paidAt])
@@ -1083,15 +1084,22 @@ model SubscriptionPayment {
 }
 
 // ---- Edufy AI token wallet (one per school) ----
+// SPLIT BALANCES: `balance` = total settled tokens available (the AI gate).
+// subscriptionTokens = the portion granted by subscription cycles / grants —
+// consumed FIRST. purchasedTokens = bought tokens — consumed after subscription
+// tokens run dry, never expire and carry forward across renewals.
 model TokenWallet {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId     String   @unique @db.ObjectId
-  balance      Int      @default(0)   // settled tokens available
-  reserved     Int      @default(0)   // held for in-flight AI operations
-  lifetimePurchased Int @default(0)
-  lifetimeConsumed  Int @default(0)
-  updatedAt    DateTime @updatedAt
-  createdAt    DateTime @default(now())
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId           String   @unique @db.ObjectId
+  balance            Int      @default(0) // settled tokens available (= sub + purchased)
+  reserved           Int      @default(0) // held for in-flight AI operations
+  subscriptionTokens Int      @default(0) // deducted FIRST (allocation priority)
+  purchasedTokens    Int      @default(0) // deducted after subscription tokens
+  lifetimePurchased  Int      @default(0)
+  lifetimeAllocated  Int      @default(0) // subscription/grant tokens credited, lifetime
+  lifetimeConsumed   Int      @default(0)
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
 
   ledger TokenLedger[]
 
@@ -1100,18 +1108,18 @@ model TokenWallet {
 
 // ---- Immutable token ledger (purchase / charge / credit / reversal) ----
 model TokenLedger {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String   @db.ObjectId
-  type        String   // PURCHASE | CHARGE | CREDIT | REFUND | RELEASE | ADJUSTMENT
-  amount      Int      // signed: positive adds tokens, negative removes
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId     String   @db.ObjectId
+  type         String // PURCHASE | CHARGE | CREDIT | REFUND | RELEASE | ADJUSTMENT
+  amount       Int // signed: positive adds tokens, negative removes
   balanceAfter Int
-  reference   String?  // idempotency key: payment ref or AI log id
-  description String?
-  metadata    Json?
-  createdAt   DateTime @default(now())
+  reference    String? // idempotency key: payment ref or AI log id
+  description  String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
 
-  wallet TokenWallet @relation(fields: [walletId], references: [id])
-  walletId String @db.ObjectId
+  wallet   TokenWallet @relation(fields: [walletId], references: [id])
+  walletId String      @db.ObjectId
 
   @@unique([schoolId, reference]) // idempotency at the DB level
   @@index([schoolId, createdAt])
@@ -1120,26 +1128,26 @@ model TokenLedger {
 
 // ---- AI usage & cost log (one row per AI operation) ----
 model AiUsageLog {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId        String?  @db.ObjectId // null for platform (super-admin onboarding)
-  userId          String?  @db.ObjectId
-  operation       String   // RESULT_SCAN | ONBOARDING_EXTRACT | ...
-  provider        String   @default("gemini")
-  model           String
-  status          String   // SUCCESS | FAILED
-  requests        Int      @default(1)
-  retries         Int      @default(0)
-  inputTokens     Int      @default(0)
-  outputTokens    Int      @default(0)
-  costUsd         Float    @default(0)
-  costUsdEstimated Boolean @default(true)
-  exchangeRate    Float    @default(1600) // USD -> NGN
-  costNgn         Float    @default(0)
-  tokensCharged   Int      @default(0)   // school tokens actually charged
-  revenueNgn      Float    @default(0)   // tokensCharged × token price
-  processingMs    Int?
-  errorMessage    String?
-  createdAt       DateTime @default(now())
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId         String?  @db.ObjectId // null for platform (super-admin onboarding)
+  userId           String?  @db.ObjectId
+  operation        String // RESULT_SCAN | ONBOARDING_EXTRACT | ...
+  provider         String   @default("gemini")
+  model            String
+  status           String // SUCCESS | FAILED
+  requests         Int      @default(1)
+  retries          Int      @default(0)
+  inputTokens      Int      @default(0)
+  outputTokens     Int      @default(0)
+  costUsd          Float    @default(0)
+  costUsdEstimated Boolean  @default(true)
+  exchangeRate     Float    @default(1600) // USD -> NGN
+  costNgn          Float    @default(0)
+  tokensCharged    Int      @default(0) // school tokens actually charged
+  revenueNgn       Float    @default(0) // tokensCharged × token price
+  processingMs     Int?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
 
   @@index([schoolId, createdAt])
   @@index([operation, createdAt])
@@ -1149,7 +1157,7 @@ model AiUsageLog {
 // ---- Platform expenses (AI costs, hosting, etc.) ----
 model PlatformExpense {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  category    String   // AI_PROCESSING | HOSTING | INFRASTRUCTURE | OTHER
+  category    String // AI_PROCESSING | HOSTING | INFRASTRUCTURE | OTHER
   description String?
   amount      Float
   date        DateTime @default(now())
@@ -1166,7 +1174,7 @@ model OnboardingBatch {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   schoolId    String   @db.ObjectId
   fileName    String
-  fileUrl     String?  // optional uploaded source document
+  fileUrl     String? // optional uploaded source document
   fileType    String?
   status      String   @default("EXTRACTED")
   // EXTRACTED | COMPLETED | FAILED
@@ -1190,26 +1198,26 @@ model OnboardingBatch {
 }
 
 model OnboardingRecord {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  batchId         String   @db.ObjectId
-  batch           OnboardingBatch @relation(fields: [batchId], references: [id])
-  name            String
-  gender          String?
-  religion        String?
-  className       String?
-  admissionNumber String?
-  dateOfBirth     DateTime?
-  parentName      String?
-  parentPhone     String?
-  parentEmail     String?
-  confidence      String   @default("medium")
-  flags           String[] @default([]) // MISSING_FIELDS | DUPLICATE | LOW_CONFIDENCE
-  duplicateOfId   String?  @db.ObjectId
-  status          String   @default("PENDING")
+  id                  String          @id @default(auto()) @map("_id") @db.ObjectId
+  batchId             String          @db.ObjectId
+  batch               OnboardingBatch @relation(fields: [batchId], references: [id])
+  name                String
+  gender              String?
+  religion            String?
+  className           String?
+  admissionNumber     String?
+  dateOfBirth         DateTime?
+  parentName          String?
+  parentPhone         String?
+  parentEmail         String?
+  confidence          String          @default("medium")
+  flags               String[]        @default([]) // MISSING_FIELDS | DUPLICATE | LOW_CONFIDENCE
+  duplicateOfId       String?         @db.ObjectId
+  status              String          @default("PENDING")
   // PENDING | APPROVED | REJECTED | REGISTERED | DUPLICATE
-  registeredStudentId String? @db.ObjectId
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  registeredStudentId String?         @db.ObjectId
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   @@index([batchId])
   @@map("onboarding_records")
@@ -1218,7 +1226,7 @@ model OnboardingRecord {
 // ---- Platform notifications (admin alert center) ----
 model PlatformNotification {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  type      String   // SCHOOL_REGISTERED | SUBSCRIPTION_EXPIRING | PAYMENT | TOKEN_PURCHASE | LOW_BALANCE | AI_SPIKE | SYNC_FAILURE | SCHOOL_INACTIVITY | SYSTEM
+  type      String // SCHOOL_REGISTERED | SUBSCRIPTION_EXPIRING | PAYMENT | TOKEN_PURCHASE | LOW_BALANCE | AI_SPIKE | SYNC_FAILURE | SCHOOL_INACTIVITY | SYSTEM
   severity  String   @default("INFO") // INFO | WARNING | CRITICAL
   title     String
   message   String
@@ -1233,13 +1241,13 @@ model PlatformNotification {
 
 // ---- Sync monitoring for SmartEdufy Lite offline clients ----
 model SyncLog {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String   @db.ObjectId
-  deviceId    String?
-  status      String   // SUCCESS | FAILED | PARTIAL
-  itemsSynced Int      @default(0)
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId     String   @db.ObjectId
+  deviceId     String?
+  status       String // SUCCESS | FAILED | PARTIAL
+  itemsSynced  Int      @default(0)
   errorMessage String?
-  createdAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
 
   @@index([schoolId, createdAt])
   @@map("sync_logs")
@@ -1263,15 +1271,15 @@ model AuditLog {
   schoolId    String   @db.ObjectId
   school      School   @relation(fields: [schoolId], references: [id])
   userId      String?  @db.ObjectId
-  userName    String?  // denormalised display name
-  userEmail   String?  // denormalised email
-  userRole    String?  // role at time of action
-  action      String   // e.g. CREATE, UPDATE, DELETE, LOGIN, LOGOUT, VIEW, EXPORT
-  entity      String?  // e.g. Student, Result, User
-  entityId    String?  // id of the affected record
-  description String   // human readable summary
-  method      String?  // HTTP method
-  path        String?  // HTTP path
+  userName    String? // denormalised display name
+  userEmail   String? // denormalised email
+  userRole    String? // role at time of action
+  action      String // e.g. CREATE, UPDATE, DELETE, LOGIN, LOGOUT, VIEW, EXPORT
+  entity      String? // e.g. Student, Result, User
+  entityId    String? // id of the affected record
+  description String // human readable summary
+  method      String? // HTTP method
+  path        String? // HTTP path
   ipAddress   String?
   userAgent   String?
   metadata    Json?
@@ -1299,4 +1307,132 @@ model RoleDef {
 
   @@unique([schoolId, name])
   @@map("roles")
+}
+
+// ============================================================
+// SUBSCRIPTION & BILLING SYSTEM (Super Admin managed)
+// ============================================================
+// Canonical plans: FREE | PAY_PER_STUDENT (STUDENT_BASED) | FIXED tiers
+// (Standard 1–500 / Growth 501–2,000 / Enterprise 2,000+). Prices are
+// configurable per tier AND per billing frequency via PlanPriceOverride.
+// schools buy token top-ups from configurable TokenPackage rows.
+
+// ---- Per-tier, per-frequency price overrides ----
+// billingFrequency: MONTHLY | TERMLY | ANNUALLY | BIENNIALLY
+model PlanPriceOverride {
+  id               String           @id @default(auto()) @map("_id") @db.ObjectId
+  planId           String           @db.ObjectId
+  plan             SubscriptionPlan @relation(fields: [planId], references: [id])
+  billingFrequency String
+  price            Float // NGN per cycle for this tier+frequency
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([planId, billingFrequency])
+  @@map("plan_price_overrides")
+}
+
+// ---- Configurable AI token packages (schools buy these top-ups) ----
+model TokenPackage {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String   @unique // e.g. "Starter"
+  tokens    Int // token quantity
+  price     Float // NGN
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases PackagePurchase[]
+
+  @@map("token_packages")
+}
+
+// ---- Invoice payments recorded against a generated invoice ----
+// model SubscriptionPayment covers plan payments; PackagePurchase covers
+// token top-ups; a paid Invoice stores paymentRef directly.
+
+// ============================================================
+// BACKFILL SEED NOTE — canonical fixed tiers are seeded by
+// prisma/seedBillingPlans.ts with these PlanPriceOverride rows:
+//   Free (FREE)            ₦0 all frequencies
+//   Pay Per Student        ₦200/student/term (STUDENT_BASED)
+//   Standard  (FIXED)      ₦25,000/mo · ₦70,000/term · ₦250,000/yr
+//   Growth    (FIXED)      ₦60,000/mo · ₦170,000/term · ₦600,000/yr
+//   Enterprise(FIXED)      ₦150,000/mo · ₦430,000/term · ₦1,500,000/yr
+// ============================================================
+// model SubscriptionPayment covers plan payments; PackagePurchase covers
+// token top-ups; this binds a payment to a specific Invoice.
+
+// ---- A token package purchase (credited AFTER server-side verification) ----
+model PackagePurchase {
+  id         String       @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId   String       @db.ObjectId
+  packageId  String       @db.ObjectId
+  package    TokenPackage @relation(fields: [packageId], references: [id])
+  tokens     Int
+  amount     Float
+  method     String       @default("TRANSFER") // TRANSFER | CARD | USSD | CASH
+  reference  String? // bank transfer / gateway reference
+  status     String       @default("PENDING") // PENDING | VERIFIED | REJECTED
+  // Verified purchases credit the wallet with reference TKGP-<purchaseId> —
+  // the ledger unique (schoolId, reference) makes crediting idempotent.
+  verifiedAt DateTime?
+  verifiedBy String?      @db.ObjectId
+  createdAt  DateTime     @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([status])
+  @@map("package_purchases")
+}
+
+// ---- Invoice for a subscription cycle (PPS snapshot or fixed tier) ----
+model Invoice {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  invoiceNo        String    @unique // INV-YYYY-NNNNNN
+  schoolId         String    @db.ObjectId
+  subscriptionId   String?   @db.ObjectId
+  // Dedup: only one invoice per school per billing period key
+  periodKey        String // e.g. "2026-01" | "2026-T1" — unique with schoolId
+  billingModel     String // FREE | PAY_PER_STUDENT | FIXED_SUBSCRIPTION
+  billingFrequency String    @default("MONTHLY")
+  description      String?
+  // Pricing breakdown
+  studentSnapshot  Int? // PPS: locked at generation; later enrolment
+  // changes do NOT touch this invoice
+  pricePerStudent  Float? // NGN per student used for this invoice
+  amount           Float
+  currency         String    @default("NGN")
+  status           String    @default("PENDING") // PENDING | PAID | OVERDUE | VOID
+  dueDate          DateTime
+  paidAt           DateTime?
+  paymentRef       String? // SubscriptionPayment/PackagePurchase linkage
+  paidAmount       Float     @default(0)
+  createdBy        String?   @db.ObjectId // platform user (manual generation)
+  source           String    @default("AUTO") // AUTO (cron) | MANUAL (super admin)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([schoolId, periodKey])
+  @@index([schoolId, status])
+  @@index([status, dueDate])
+  @@map("invoices")
+}
+
+// ---- Immutable billing event log (allocation/renewal/invoice audit) ----
+// Idempotency: unique (schoolId, eventKey) prevents double token allocation
+// or double invoicing when the cron runs more than once.
+model BillingEvent {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String   @db.ObjectId
+  type        String // INVOICE_GENERATED | PAYMENT_RECORDED | SUBSCRIPTION_RENEWED
+  // | TOKENS_ALLOCATED | SUBSCRIPTION_EXPIRED | BILLING_CHANGED
+  eventKey    String   @default("") // idempotency key (e.g. SUB-ALLOC-<subId>-2026-01)
+  description String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@unique([schoolId, eventKey])
+  @@index([schoolId, type, createdAt])
+  @@map("billing_events")
 }

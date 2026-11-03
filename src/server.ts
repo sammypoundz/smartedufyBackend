@@ -40,6 +40,7 @@ import aiScanRoutes from './routes/aiScanRoutes';
 import platformRoutes from './routes/platformRoutes';
 import platformOnboardingRoutes from './routes/platformOnboardingRoutes';
 import tokenRoutes from './routes/tokenRoutes';
+import { billingService } from './services/billingService';
 
 
 // Import middleware
@@ -138,6 +139,27 @@ app.listen(port, () => {
   console.log(`🚀 Server running on port ${port}`);
   console.log(`CORS enabled for all origins`);
   console.log(`📁 Static files served from /uploads`);
+
+  // ---------- Billing cron (every 15 minutes) ----------
+  // Expiry sweeps, auto-invoice generation & monthly token allocation.
+  // All operations are idempotent (BillingEvent/ledger unique keys), so a
+  // re-run can never double-invoice or double-allocate.
+  const BILLING_CRON_INTERVAL_MS = 15 * 60 * 1000;
+  const runBillingCron = async () => {
+    try {
+      const r = await billingService.runBillingCron();
+      if (r.expired || r.invoices || r.allocated) {
+        console.log(
+          `⏱  billing cron: ${r.expired} expired, ${r.invoices} invoiced, ${r.allocated} allocated`,
+        );
+      }
+    } catch (e) {
+      console.error('billing cron failed:', (e as Error).message);
+    }
+  };
+  setTimeout(runBillingCron, 10_000); // shortly after boot
+  const billingCronTimer = setInterval(runBillingCron, BILLING_CRON_INTERVAL_MS);
+  billingCronTimer.unref?.();
 
   // One-time backfill: rows created before the createdAt field existed (e.g.
   // from the seed or imports) would otherwise break queries that order by it.

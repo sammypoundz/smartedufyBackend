@@ -492,8 +492,10 @@ router.get('/me', authMiddleware, async (req, res, next) => {
 });
 
 // Public-ish plans catalogue for the signed-in school (admin/teacher portal):
-// shows every ACTIVE plan so the school can see what it is on and what it
-// could switch/upgrade to. Marketing-safe fields only.
+// shows the ONE canonical ACTIVE plan (Pay Per Student) so the school can see
+// what billing applies to it. NOTE: school-management features are FREE until
+// the platform assigns this plan; Edufy AI is always gated by the token
+// wallet regardless of plan. Marketing-safe fields only.
 router.get('/plans', authMiddleware, async (req, res, next) => {
   try {
     const plans = await prisma.subscriptionPlan.findMany({

@@ -27,6 +27,7 @@ const platformAuth_1 = require("../middleware/platformAuth");
 const platformAuditService_1 = require("../services/platformAuditService");
 const tokenWalletService_1 = require("../services/tokenWalletService");
 const platformSettingsService_1 = require("../services/platformSettingsService");
+const billingService_1 = require("../services/billingService");
 const platformNotificationService_1 = require("../services/platformNotificationService");
 const router = (0, express_1.Router)();
 // ---------- helpers ----------
@@ -616,32 +617,76 @@ router.get("/analytics/students-staff", auth, (0, platformAuth_1.requirePlatform
 const planSchema = zod_1.z.object({
     name: zod_1.z.string().min(2).max(60),
     description: zod_1.z.string().max(300).optional(),
-    monthlyPrice: zod_1.z.number().positive(),
-    maxStudents: zod_1.z.number().int().positive().optional(),
+    // FIXED = flat monthly fee | FREE = ₦0, no automatic AI allowance | STUDENT_BASED = per-student-per-term
+    type: zod_1.z.enum(["FREE", "FIXED", "STUDENT_BASED"]).default("FIXED"),
+    // Monthly recurring price in NGN per school (FIXED type; 0 for FREE)
+    monthlyPrice: zod_1.z.number().min(0).optional(),
+    // NGN per eligible student per term (STUDENT_BASED only)
+    perStudentRate: zod_1.z.number().positive().optional(),
+    // AI tokens credited per successfully activated paid billing cycle
+    aiTokenAllowance: zod_1.z.number().int().min(0).max(100000).optional(),
+    gracePeriodDays: zod_1.z.number().int().min(0).max(90).optional(),
+    maxStudents: zod_1.z.number().int().positive().nullable().optional(),
     isActive: zod_1.z.boolean().optional(),
+    // Marketing copy shown to schools browsing available plans
+    tagline: zod_1.z.string().max(160).optional(),
+    // Feature bullets: [{ label, comingSoon? }]
+    features: zod_1.z
+        .array(zod_1.z.object({
+        label: zod_1.z.string().min(1).max(120),
+        comingSoon: zod_1.z.boolean().optional(),
+    }))
+        .max(20)
+        .optional(),
+    featured: zod_1.z.boolean().optional(),
 });
+const CYCLE_MONTHS = {
+    MONTHLY: 1,
+    QUARTERLY: 3,
+    TERMLY: 3,
+    HALF_YEARLY: 6,
+    ANNUAL: 12,
+};
+const SUB_STATUSES = [
+    "ACTIVE",
+    "EXPIRED",
+    "TRIAL",
+    "SUSPENDED",
+    "PENDING_RENEWAL",
+    "PENDING_PAYMENT",
+    "GRACE_PERIOD",
+    "CANCELLED",
+];
 router.get("/plans", auth, asyncRoute(async (_req, res) => {
     res.json(await prisma_1.prisma.subscriptionPlan.findMany({
         orderBy: { monthlyPrice: "asc" },
     }));
 }));
-router.post("/plans", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
-    const data = planSchema.parse(req.body);
-    const plan = await prisma_1.prisma.subscriptionPlan.create({ data });
-    await (0, platformAuditService_1.logPlatformActivity)({
-        actorId: req.platformUser.id,
-        actorName: req.platformUser.name,
-        actorRole: req.platformUser.role,
-        action: "PLAN_CREATE",
-        targetType: "SubscriptionPlan",
-        targetId: plan.id,
-        description: `Created subscription plan ${plan.name} at ₦${plan.monthlyPrice}/month`,
-        ipAddress: req.ip,
+// ---- Canonical billing plans: exactly ONE billing plan exists (Pay Per
+// Student). The flat-fee "Subscription" billing type has been scrapped.
+// The super admin edits it; creating/deleting billing plans is disabled.
+const CANONICAL_PLAN_NAMES = ["Pay Per Student"];
+router.get("/plans", auth, asyncRoute(async (_req, res) => {
+    res.json(await prisma_1.prisma.subscriptionPlan.findMany({
+        orderBy: { monthlyPrice: "asc" },
+    }));
+}));
+// DISABLED: billing plan creation. The product ships with exactly one
+// canonical billing plan (Pay Per Student) — see prisma/seedBillingPlans.ts.
+// Editing its pricing/copy is done via PUT.
+router.post("/plans", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (_req, res) => {
+    res.status(403).json({
+        error: "Billing plans cannot be created. Only the canonical billing plan (Pay Per Student) exists — edit it instead.",
     });
-    res.status(201).json(plan);
 }));
 router.put("/plans/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
     const data = planSchema.partial().parse(req.body);
+    // Never allow changing the billing type or name of a canonical plan.
+    delete data.type;
+    delete data.name;
+    // null maxStudents means "no cap" — convert to undefined so Prisma
+    // doesn't overwrite the stored value unintentionally? No: null IS the
+    // intent (clear the cap), and the column is Int? so null is valid there.
     const plan = await prisma_1.prisma.subscriptionPlan.update({
         where: { id: String(req.params.id) },
         data,
@@ -653,7 +698,13 @@ router.put("/plans/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_AD
         action: "PLAN_UPDATE",
         targetType: "SubscriptionPlan",
         targetId: plan.id,
-        description: `Updated subscription plan ${plan.name}`,
+        description: `Updated ${plan.type} billing plan ${plan.name}` +
+            (plan.type === "STUDENT_BASED"
+                ? plan.perStudentRate != null
+                    ? ` at ₦${plan.perStudentRate}/student/term`
+                    : ""
+                : ` at ₦${plan.monthlyPrice}/month`) +
+            ` · AI allowance ${plan.aiTokenAllowance} tokens/cycle`,
         metadata: data,
         ipAddress: req.ip,
     });
@@ -687,6 +738,19 @@ router.post("/subscriptions", auth, (0, platformAuth_1.requirePlatformRole)("SUP
         planId: zod_1.z.string(),
         months: zod_1.z.number().int().positive().default(1),
         trial: zod_1.z.boolean().optional(),
+        billingCycle: zod_1.z
+            .enum(["MONTHLY", "QUARTERLY", "TERMLY", "HALF_YEARLY", "ANNUAL", "BIENNIALLY"])
+            .optional(),
+        // Per-school price override for the cycle (server-validated ≥ 0)
+        pricePerCycle: zod_1.z.number().min(0).optional(),
+        // Student-based billing: snapshot of eligible students taken NOW at
+        // assignment time and locked for the cycle. Change-locked afterwards.
+        studentSnapshotCount: zod_1.z.number().int().min(0).optional(),
+        // Token override: super admin decides the bundled tokens at assign time.
+        // 0 = no bundled tokens (school tops up itself). Omitted = plan default.
+        aiTokenAllowance: zod_1.z.number().int().min(0).max(100000).optional(),
+        schoolTermId: zod_1.z.string().optional(),
+        reason: zod_1.z.string().max(300).optional(),
     });
     const data = schema.parse(req.body);
     const plan = await prisma_1.prisma.subscriptionPlan.findUnique({
@@ -699,20 +763,71 @@ router.post("/subscriptions", auth, (0, platformAuth_1.requirePlatformRole)("SUP
     });
     if (!school)
         return res.status(404).json({ error: "School not found" });
+    // Server-side pricing — never trust a client-computed total.
+    // FREE → ₦0. STUDENT_BASED → snapshot count × per-student rate (count is
+    // re-derived server-side unless explicitly overridden with a reason).
+    let pricePerCycle = data.pricePerCycle ?? plan.monthlyPrice;
+    let studentSnapshotCount = data.studentSnapshotCount;
+    if (plan.type === "FREE")
+        pricePerCycle = 0;
+    if (plan.type === "STUDENT_BASED") {
+        const rate = plan.perStudentRate || 0;
+        if (studentSnapshotCount === undefined) {
+            // Eligible students = active student profiles in the school NOW.
+            studentSnapshotCount = await prisma_1.prisma.student.count({
+                where: { schoolId: school.id, isActive: true },
+            });
+        }
+        // Per-student rate drives pricing — ignore any plan/monthly fallback.
+        pricePerCycle = studentSnapshotCount * rate;
+    }
+    if (plan.type === "FIXED" && data.pricePerCycle === undefined) {
+        // Use the tier's PlanPriceOverride for the chosen frequency when the
+        // super admin didn't force a per-school price.
+        const override = await prisma_1.prisma.planPriceOverride.findUnique({
+            where: {
+                planId_billingFrequency: {
+                    planId: plan.id,
+                    billingFrequency: data.billingCycle || "MONTHLY",
+                },
+            },
+        });
+        if (override)
+            pricePerCycle = override.price;
+    }
+    const cycleMonths = CYCLE_MONTHS[data.billingCycle || "MONTHLY"] || data.months;
+    const months = data.billingCycle ? cycleMonths : data.months;
     const endDate = new Date();
-    endDate.setMonth(endDate.getMonth() + data.months);
+    endDate.setMonth(endDate.getMonth() + months);
+    // Free plans activate immediately; paid plans without a recorded payment
+    // sit in PENDING_PAYMENT until a verified payment lands.
+    const status = plan.type === "FREE"
+        ? "ACTIVE"
+        : data.trial
+            ? "TRIAL"
+            : "PENDING_PAYMENT";
     const sub = await prisma_1.prisma.subscription.upsert({
         where: { schoolId: data.schoolId },
         create: {
             schoolId: data.schoolId,
             planId: data.planId,
-            status: data.trial ? "TRIAL" : "ACTIVE",
+            status,
+            billingCycle: data.billingCycle || "MONTHLY",
+            pricePerCycle,
+            aiTokenAllowance: data.aiTokenAllowance, // null = plan default
+            studentSnapshotCount,
+            schoolTermId: data.schoolTermId,
             endDate,
             trial: data.trial || false,
         },
         update: {
             planId: data.planId,
-            status: data.trial ? "TRIAL" : "ACTIVE",
+            status,
+            billingCycle: data.billingCycle || "MONTHLY",
+            pricePerCycle,
+            aiTokenAllowance: data.aiTokenAllowance, // null = plan default
+            studentSnapshotCount,
+            schoolTermId: data.schoolTermId,
             endDate,
             trial: data.trial || false,
         },
@@ -724,7 +839,22 @@ router.post("/subscriptions", auth, (0, platformAuth_1.requirePlatformRole)("SUP
         action: "SUBSCRIPTION_ASSIGN",
         targetType: "Subscription",
         targetId: sub.id,
-        description: `Assigned plan ${plan.name} to ${school.name} for ${data.months} month(s)`,
+        description: `Assigned ${plan.type} plan ${plan.name} to ${school.name} ` +
+            `(₦${pricePerCycle.toLocaleString()}/${data.billingCycle || "MONTHLY"}` +
+            (studentSnapshotCount !== undefined
+                ? `, snapshot ${studentSnapshotCount} students`
+                : "") +
+            (data.aiTokenAllowance !== undefined
+                ? `, tokens ${data.aiTokenAllowance}/cycle (override)`
+                : `, tokens plan-default ${plan.aiTokenAllowance}/cycle`) +
+            `, status ${status})` +
+            (data.reason ? ` — reason: ${data.reason}` : ""),
+        metadata: {
+            pricePerCycle,
+            studentSnapshotCount,
+            aiTokenAllowance: data.aiTokenAllowance ?? plan.aiTokenAllowance,
+            reason: data.reason,
+        },
         ipAddress: req.ip,
     });
     res.status(201).json(sub);
@@ -769,6 +899,35 @@ router.post("/subscriptions/payments", auth, (0, platformAuth_1.requirePlatformR
         where: { id: sub.id },
         data: { status: "ACTIVE", endDate: newEnd },
     });
+    // Credit the plan's AI token allowance once per verified paid cycle.
+    // Honors a per-assignment token override set by the super admin at assign
+    // time (0 = no bundled tokens); falls back to the plan's default.
+    // Idempotent via the token-ledger unique (schoolId, reference).
+    const plan = await prisma_1.prisma.subscriptionPlan.findUnique({
+        where: { id: sub.planId },
+    });
+    const allowance = Math.max(0, sub.aiTokenAllowance ?? plan?.aiTokenAllowance ?? 100);
+    let aiTokensGranted = 0;
+    if (allowance > 0) {
+        const ref = `SUB-${payment.id}`; // stable per payment → no double credit
+        try {
+            await tokenWalletService_1.tokenWalletService.purchase(data.schoolId, allowance, ref, {
+                note: `Subscription AI allowance — ${plan?.name} (${data.months} cycle)`,
+                metadata: { subscriptionPaymentId: payment.id, planId: plan?.id },
+            });
+            aiTokensGranted = allowance;
+            await prisma_1.prisma.subscriptionPayment.update({
+                where: { id: payment.id },
+                data: { aiTokensGranted },
+            });
+        }
+        catch (e) {
+            // A duplicate reference is fine (payment already credited); anything
+            // else must not fail the payment itself.
+            if (!/already/i.test(e.message))
+                console.error("allowance credit failed:", e.message);
+        }
+    }
     await (0, platformNotificationService_1.notifyPlatform)({
         type: "PAYMENT",
         title: "Subscription payment received",
@@ -1012,6 +1171,277 @@ router.post("/wallets/:schoolId/adjust", auth, (0, platformAuth_1.requirePlatfor
 router.get("/wallets/:schoolId/ledger", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN", "SUPPORT_OFFICER"), asyncRoute(async (req, res) => {
     const limit = Math.min(500, Number(req.query.limit) || 50);
     res.json(await tokenWalletService_1.tokenWalletService.ledger(String(req.params.schoolId), limit));
+}));
+// ============================================================
+// MODULE 7b — BILLING: overview, invoices, price overrides,
+//             token packages, billing cron
+// ============================================================
+// ---- Billing overview (KPI strip for the Subscriptions & Billing page) ----
+router.get("/billing/overview", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN", "SUPPORT_OFFICER"), asyncRoute(async (_req, res) => {
+    const [pendingAgg, overdue, paidAgg, invoicesCount, events, upcomingSubs] = await Promise.all([
+        prisma_1.prisma.invoice.aggregate({
+            _sum: { amount: true },
+            where: { status: "PENDING" },
+        }),
+        prisma_1.prisma.invoice.count({
+            where: { status: "PENDING", dueDate: { lt: new Date() } },
+        }),
+        prisma_1.prisma.invoice.aggregate({
+            _sum: { paidAmount: true },
+            where: { status: "PAID" },
+        }),
+        prisma_1.prisma.invoice.count(),
+        prisma_1.prisma.billingEvent.findMany({
+            orderBy: { createdAt: "desc" },
+            take: 25,
+        }),
+        prisma_1.prisma.subscription.findMany({
+            where: { status: "ACTIVE", endDate: { lte: new Date(Date.now() + 30 * 86400000) } },
+            include: { plan: true },
+            orderBy: { endDate: "asc" },
+            take: 10,
+        }),
+    ]);
+    res.json({
+        pendingAmount: pendingAgg._sum.amount || 0,
+        collectedAmount: paidAgg._sum.paidAmount || 0,
+        overdue,
+        invoicesCount,
+        recentEvents: events,
+        upcomingRenewals: upcomingSubs.map((s) => ({
+            id: s.id,
+            schoolId: s.schoolId,
+            plan: s.plan.name,
+            endDate: s.endDate,
+            billingCycle: s.billingCycle,
+        })),
+    });
+}));
+// ---- Invoice list (filter by school / status) ----
+router.get("/invoices", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN", "SUPPORT_OFFICER"), asyncRoute(async (req, res) => {
+    const where = {};
+    if (req.query.schoolId)
+        where.schoolId = String(req.query.schoolId);
+    if (req.query.status)
+        where.status = String(req.query.status);
+    const limit = Math.min(500, Number(req.query.limit) || 100);
+    const invoices = await prisma_1.prisma.invoice.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+    });
+    const schoolIds = Array.from(new Set(invoices.map((i) => i.schoolId)));
+    const schools = await prisma_1.prisma.school.findMany({
+        where: { id: { in: schoolIds } },
+        select: { id: true, name: true },
+    });
+    const nameMap = new Map(schools.map((s) => [s.id, s.name]));
+    res.json(invoices.map((i) => ({
+        ...i,
+        schoolName: nameMap.get(i.schoolId) || i.schoolId,
+    })));
+}));
+// ---- Manually generate an invoice for a school (super admin) ----
+router.post("/invoices/generate", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({ schoolId: zod_1.z.string() });
+    const { schoolId } = schema.parse(req.body);
+    const invoice = await billingService_1.billingService.generateInvoiceForSchool(schoolId, "MANUAL", req.platformUser.id);
+    if (!invoice)
+        return res.status(409).json({
+            error: "No invoice generated — school may have no active paid subscription, or this period is already invoiced.",
+        });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "INVOICE_GENERATE",
+        targetType: "Invoice",
+        targetId: invoice.id,
+        description: `Manually generated invoice ${invoice.invoiceNo} (${invoice.amount})`,
+        ipAddress: req.ip,
+    });
+    res.status(201).json(invoice);
+}));
+// ---- Record a verified invoice payment (extends subscription + tokens) ----
+router.post("/invoices/:id/pay", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({
+        paymentRef: zod_1.z.string().min(3).max(100),
+        method: zod_1.z.enum(["TRANSFER", "CARD", "USSD", "CASH"]).default("TRANSFER"),
+    });
+    const data = schema.parse(req.body);
+    const invoice = await billingService_1.billingService.payInvoice(String(req.params.id), data.paymentRef, data.method);
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "INVOICE_PAY",
+        targetType: "Invoice",
+        targetId: invoice.id,
+        description: `Invoice ${invoice.invoiceNo} marked paid (ref ${data.paymentRef})`,
+        ipAddress: req.ip,
+    });
+    res.json(invoice);
+}));
+// ---- Void an invoice ----
+router.post("/invoices/:id/void", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const invoice = await prisma_1.prisma.invoice.update({
+        where: { id: String(req.params.id) },
+        data: { status: "VOID" },
+    });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "INVOICE_VOID",
+        targetType: "Invoice",
+        targetId: invoice.id,
+        description: `Invoice ${invoice.invoiceNo} voided`,
+        ipAddress: req.ip,
+    });
+    res.json(invoice);
+}));
+// ---- Per-tier price overrides (read all, upsert one) ----
+router.get("/price-overrides", auth, asyncRoute(async (_req, res) => {
+    res.json(await prisma_1.prisma.planPriceOverride.findMany());
+}));
+router.put("/price-overrides", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({
+        planId: zod_1.z.string(),
+        billingFrequency: zod_1.z.enum([
+            "MONTHLY",
+            "QUARTERLY",
+            "TERMLY",
+            "HALF_YEARLY",
+            "ANNUAL",
+            "BIENNIALLY",
+        ]),
+        price: zod_1.z.number().min(0),
+    });
+    const data = schema.parse(req.body);
+    const override = await prisma_1.prisma.planPriceOverride.upsert({
+        where: {
+            planId_billingFrequency: {
+                planId: data.planId,
+                billingFrequency: data.billingFrequency,
+            },
+        },
+        update: { price: data.price },
+        create: data,
+    });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "PRICE_OVERRIDE_SET",
+        targetType: "PlanPriceOverride",
+        targetId: override.id,
+        description: `${data.billingFrequency} price set to ${data.price}`,
+        ipAddress: req.ip,
+    });
+    res.json(override);
+}));
+// ---- Token packages CRUD ----
+router.get("/token-packages", auth, asyncRoute(async (_req, res) => {
+    res.json(await prisma_1.prisma.tokenPackage.findMany({
+        orderBy: { sortOrder: "asc" },
+    }));
+}));
+router.post("/token-packages", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({
+        name: zod_1.z.string().min(2).max(50),
+        tokens: zod_1.z.number().int().positive(),
+        price: zod_1.z.number().positive(),
+        sortOrder: zod_1.z.number().int().default(0),
+    });
+    const data = schema.parse(req.body);
+    const pkg = await prisma_1.prisma.tokenPackage.create({ data });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "TOKEN_PACKAGE_CREATE",
+        targetType: "TokenPackage",
+        targetId: pkg.id,
+        description: `Created token package ${pkg.name}: ${pkg.tokens} tokens @ ${pkg.price}`,
+        ipAddress: req.ip,
+    });
+    res.status(201).json(pkg);
+}));
+router.put("/token-packages/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({
+        name: zod_1.z.string().min(2).max(50).optional(),
+        tokens: zod_1.z.number().int().positive().optional(),
+        price: zod_1.z.number().positive().optional(),
+        isActive: zod_1.z.boolean().optional(),
+        sortOrder: zod_1.z.number().int().optional(),
+    });
+    const data = schema.parse(req.body);
+    const pkg = await prisma_1.prisma.tokenPackage.update({
+        where: { id: String(req.params.id) },
+        data,
+    });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "TOKEN_PACKAGE_UPDATE",
+        targetType: "TokenPackage",
+        targetId: pkg.id,
+        description: `Updated token package ${pkg.name}`,
+        ipAddress: req.ip,
+    });
+    res.json(pkg);
+}));
+router.delete("/token-packages/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const pkg = await prisma_1.prisma.tokenPackage.update({
+        where: { id: String(req.params.id) },
+        data: { isActive: false },
+    });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "TOKEN_PACKAGE_DEACTIVATE",
+        targetType: "TokenPackage",
+        targetId: pkg.id,
+        description: `Deactivated token package ${pkg.name}`,
+        ipAddress: req.ip,
+    });
+    res.json(pkg);
+}));
+// ---- Billing cron (manual trigger for ops / testing) ----
+router.post("/billing/cron", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const result = await billingService_1.billingService.runBillingCron();
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "BILLING_CRON_MANUAL",
+        description: `Manual billing cron: ${JSON.stringify(result)}`,
+        ipAddress: req.ip,
+    });
+    res.json(result);
+}));
+// ---- Complimentary token grant (subscription split, audited) ----
+router.post("/wallets/:schoolId/grant", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({
+        tokens: zod_1.z.number().int().positive().max(100000),
+        note: zod_1.z.string().min(3).max(300),
+    });
+    const data = schema.parse(req.body);
+    const ref = `GRANT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const result = await tokenWalletService_1.tokenWalletService.allocate(String(req.params.schoolId), data.tokens, ref, { note: data.note, metadata: { grantedBy: req.platformUser.id } });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "WALLET_GRANT",
+        targetType: "TokenWallet",
+        targetId: String(req.params.schoolId),
+        description: `Granted ${data.tokens} subscription tokens: ${data.note}`,
+        ipAddress: req.ip,
+    });
+    res.status(201).json(result);
 }));
 // Token price setting
 router.get("/settings/token-price", auth, asyncRoute(async (_req, res) => {

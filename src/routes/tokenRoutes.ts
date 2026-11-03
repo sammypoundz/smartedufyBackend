@@ -65,23 +65,21 @@ router.get(
   }),
 );
 
-// Token packages offered to schools (price = tokens × token price).
-const PACKAGES: Record<string, number> = {
-  STARTER: 50,
-  STANDARD: 200,
-  BULK: 1000,
-};
-
+// Token packages offered to schools (from the configurable TokenPackage
+// catalogue the super admin manages; falls back to nothing if empty).
 router.get(
   "/packages",
   authMiddleware,
   asyncRoute(async (_req, res) => {
-    const price = await getTokenPrice();
+    const pkgs = await prisma.tokenPackage.findMany({
+      where: { isActive: true },
+      orderBy: { sortOrder: "asc" },
+    });
     res.json(
-      Object.entries(PACKAGES).map(([name, tokens]) => ({
-        name,
-        tokens,
-        priceNgn: tokens * price,
+      pkgs.map((p) => ({
+        name: p.name,
+        tokens: p.tokens,
+        priceNgn: p.price,
       })),
     );
   }),
@@ -167,3 +165,39 @@ router.post(
 );
 
 export default router;
+
+// ============================================================
+// SCHOOL BILLING — /api/tokens/billing/* (school's own invoices)
+// ============================================================
+
+/** This school's subscription invoices (paid & pending). */
+router.get(
+  "/billing/invoices",
+  authMiddleware,
+  roleGuard(["ADMIN", "PRINCIPAL"]),
+  asyncRoute(async (req: AuthRequest, res: Response) => {
+    const schoolId = req.user!.schoolId;
+    const invoices = await prisma.invoice.findMany({
+      where: { schoolId },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+    res.json(invoices);
+  }),
+);
+
+/** Billing history events for this school (allocation/renewal audit trail). */
+router.get(
+  "/billing/events",
+  authMiddleware,
+  roleGuard(["ADMIN", "PRINCIPAL"]),
+  asyncRoute(async (req: AuthRequest, res: Response) => {
+    const schoolId = req.user!.schoolId;
+    const events = await prisma.billingEvent.findMany({
+      where: { schoolId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+    res.json(events);
+  }),
+);

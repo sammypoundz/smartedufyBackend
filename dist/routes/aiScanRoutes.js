@@ -11,8 +11,8 @@ const auth_1 = require("../middleware/auth");
 const roleGuard_1 = require("../middleware/roleGuard");
 const aiUsageService_1 = require("../services/aiUsageService");
 const tokenWalletService_1 = require("../services/tokenWalletService");
+const tokenGate_1 = require("../services/tokenGate");
 const platformSettingsService_1 = require("../services/platformSettingsService");
-const platformNotificationService_1 = require("../services/platformNotificationService");
 const router = (0, express_1.Router)();
 const upload = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
@@ -33,34 +33,16 @@ router.post("/result-sheet", auth_1.authMiddleware, (0, roleGuard_1.privilegeGua
             .json({ error: 'No image uploaded. Attach the photo as "image".' });
     const schoolId = req.user.schoolId;
     try {
-        // ---- Token gating (Module 7) ----
-        const wallet = await tokenWalletService_1.tokenWalletService.getWallet(schoolId);
-        const CHARGE = 1; // 1 token per result-sheet scan
-        if (wallet.balance < CHARGE) {
-            await (0, platformNotificationService_1.notifyPlatform)({
-                type: "LOW_BALANCE",
-                title: "Low token balance",
-                message: `A scan was blocked at ${schoolId}: balance ${wallet.balance}, need ${CHARGE}.`,
-                schoolId,
-                severity: "WARNING",
-            });
-            return res.status(402).json({
-                error: "Insufficient token balance",
-                required: CHARGE,
-                balance: wallet.balance,
-            });
-        }
-        const ref = `SCAN-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await tokenWalletService_1.tokenWalletService.reserve(schoolId, CHARGE, ref);
+        // ---- Token gating (Module 7) — 1 token per result-sheet scan ----
+        const CHARGE = 1;
+        const gate = await (0, tokenGate_1.gateTokens)(schoolId, CHARGE, "SCAN");
         let students;
-        let model = "unknown";
-        let aiCostNgn = 0;
         try {
             students = await (0, aiService_1.extractResultSheet)(file.buffer, file.mimetype);
         }
         catch (err) {
             // Release reserved tokens on failure
-            await tokenWalletService_1.tokenWalletService.release(schoolId, CHARGE, ref);
+            await gate.release();
             await (0, aiUsageService_1.logAiUsage)({
                 schoolId,
                 userId: req.user.id,
@@ -74,7 +56,7 @@ router.post("/result-sheet", auth_1.authMiddleware, (0, roleGuard_1.privilegeGua
         }
         // Charge reserved tokens after success
         const tokenPrice = await (0, platformSettingsService_1.getTokenPrice)();
-        await tokenWalletService_1.tokenWalletService.charge(schoolId, CHARGE, ref);
+        await gate.charge();
         await (0, aiUsageService_1.logAiUsage)({
             schoolId,
             userId: req.user.id,

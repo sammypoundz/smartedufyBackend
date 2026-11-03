@@ -400,6 +400,18 @@ router.get('/me', auth_1.authMiddleware, async (req, res, next) => {
         });
         if (!user)
             return res.status(404).json({ error: 'User not found' });
+        // The school's assigned subscription (stored by schoolId on Subscription).
+        const subscription = user.schoolId
+            ? await prisma_1.prisma.subscription.findUnique({
+                where: { schoolId: user.schoolId },
+                include: { plan: true },
+            })
+            : null;
+        // Effective bundled tokens: per-assignment override if the super admin set
+        // one at assign time, otherwise the plan's default allowance.
+        const effectiveTokenAllowance = subscription
+            ? (subscription.aiTokenAllowance ?? subscription.plan.aiTokenAllowance)
+            : 0;
         const profile = user.student || user.teacher || user.parent;
         // Resolve roles + effective privileges fresh from the DB so that role or
         // privilege changes made by an admin apply without requiring a re-login.
@@ -419,8 +431,57 @@ router.get('/me', auth_1.authMiddleware, async (req, res, next) => {
             isActive: user.isActive,
             schoolId: user.schoolId,
             school: user.school,
+            // The school's assigned subscription plan — drives the school-facing
+            // billing view. STUDENT_BASED plans show price = snapshot × rate.
+            subscription: subscription
+                ? {
+                    planName: subscription.plan.name,
+                    planType: subscription.plan.type,
+                    perStudentRate: subscription.plan.perStudentRate,
+                    // Effective bundled tokens: assignment override ?? plan default
+                    aiTokenAllowance: effectiveTokenAllowance,
+                    tokenIsOverride: subscription.aiTokenAllowance != null,
+                    billingCycle: subscription.billingCycle,
+                    pricePerCycle: subscription.pricePerCycle,
+                    studentSnapshotCount: subscription.studentSnapshotCount,
+                    status: subscription.status,
+                    trial: subscription.trial,
+                    endDate: subscription.endDate,
+                }
+                : null,
             profile,
         });
+    }
+    catch (err) {
+        next(err);
+    }
+});
+// Public-ish plans catalogue for the signed-in school (admin/teacher portal):
+// shows the ONE canonical ACTIVE plan (Pay Per Student) so the school can see
+// what billing applies to it. NOTE: school-management features are FREE until
+// the platform assigns this plan; Edufy AI is always gated by the token
+// wallet regardless of plan. Marketing-safe fields only.
+router.get('/plans', auth_1.authMiddleware, async (req, res, next) => {
+    try {
+        const plans = await prisma_1.prisma.subscriptionPlan.findMany({
+            where: { isActive: true },
+            orderBy: [{ monthlyPrice: 'asc' }, { createdAt: 'asc' }],
+            select: {
+                id: true,
+                name: true,
+                description: true,
+                tagline: true,
+                type: true,
+                monthlyPrice: true,
+                perStudentRate: true,
+                aiTokenAllowance: true,
+                maxStudents: true,
+                features: true,
+                featured: true,
+                gracePeriodDays: true,
+            },
+        });
+        res.json({ plans });
     }
     catch (err) {
         next(err);

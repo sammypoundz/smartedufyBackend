@@ -4,12 +4,15 @@ import { prisma } from "../config/prisma";
 export type NotificationType =
   | "SCHOOL_REGISTERED"
   | "SUBSCRIPTION_EXPIRING"
+  | "SUBSCRIPTION_EXPIRED"
   | "PAYMENT"
   | "TOKEN_PURCHASE"
   | "LOW_BALANCE"
   | "AI_SPIKE"
   | "SYNC_FAILURE"
   | "SCHOOL_INACTIVITY"
+  | "SUBSCRIPTION"
+  | "INVOICE"
   | "SYSTEM";
 
 export async function notifyPlatform(input: {

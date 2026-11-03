@@ -32,7 +32,7 @@ export const tokenWalletService = {
     return tx.tokenWallet.upsert({ where: { schoolId }, create: { schoolId }, update: {} });
   },
 
-  /** Purchase tokens (credits the wallet, records revenue). */
+  /** Purchase tokens (credits the PURCHASED split; records revenue). */
   async purchase(
     schoolId: string,
     tokens: number,
@@ -67,6 +67,7 @@ export const tokenWalletService = {
         where: { schoolId },
         data: {
           balance: { increment: tokens },
+          purchasedTokens: { increment: tokens },
           lifetimePurchased: { increment: tokens },
         },
       });
@@ -202,6 +203,55 @@ export const tokenWalletService = {
           balanceAfter,
           reference,
           description: reason,
+        },
+      });
+      return { wallet: updated, entry, duplicate: false };
+    });
+  },
+
+  /**
+   * Allocate subscription tokens (credits the SUBSCRIPTION split). Used by the
+   * billing cron and by super-admin complimentary grants. Subscription tokens
+   * are always consumed BEFORE purchased tokens and expire per allocation
+   * policy (rollover handled at sweep time by billingService).
+   * Idempotent on the ledger unique (schoolId, reference).
+   */
+  async allocate(
+    schoolId: string,
+    tokens: number,
+    reference: string,
+    opts?: { note?: string; metadata?: any },
+  ) {
+    if (tokens <= 0) throw new Error("Allocation must be positive");
+    return prisma.$transaction(async (tx) => {
+      const wallet = await tx.tokenWallet.upsert({
+        where: { schoolId },
+        create: { schoolId },
+        update: {},
+      });
+      const existing = await tx.tokenLedger.findUnique({
+        where: { schoolId_reference: { schoolId, reference } },
+      });
+      if (existing) return { wallet, entry: existing, duplicate: true };
+      const entry = await tx.tokenLedger.create({
+        data: {
+          walletId: wallet.id,
+          schoolId,
+          type: "CREDIT",
+          amount: tokens,
+          balanceAfter: wallet.balance + tokens,
+          reference,
+          description:
+            opts?.note || `Subscription token allocation: ${tokens} tokens`,
+          metadata: opts?.metadata,
+        },
+      });
+      const updated = await tx.tokenWallet.update({
+        where: { schoolId },
+        data: {
+          balance: { increment: tokens },
+          subscriptionTokens: { increment: tokens },
+          lifetimeAllocated: { increment: tokens },
         },
       });
       return { wallet: updated, entry, duplicate: false };
