@@ -82,7 +82,10 @@ app.use('/api/auth', authRoutes); // login, register, etc.
 // ---------- BIA CONNECT webhook — PUBLIC, must bypass auth/tenant ----------
 // (the webhook body is untrusted: it only triggers a server-side re-verify)
 import biaWebhookRoutes from './routes/paymentRoutes';
-app.use('/api/v1/webhooks', biaWebhookRoutes);
+// mounted at /api/v1 so the router's '/webhooks/bia' path resolves to
+// /api/v1/webhooks/bia — the same router is also mounted at /api/payments
+// below for the authenticated payment endpoints.
+app.use('/api/v1', biaWebhookRoutes);
 
 // ---------- Super Admin console — SEPARATE auth realm ----------
 // Mounted BEFORE the global auth/tenant middleware: platform routes use their
