@@ -117,12 +117,14 @@ const CANONICAL: {
   },
 ];
 
-const TOKEN_PACKAGES = [
-  { name: "Starter", tokens: 100, price: 5000, sortOrder: 1 },
-  { name: "Standard", tokens: 500, price: 22500, sortOrder: 2 },
-  { name: "Bulk", tokens: 2000, price: 80000, sortOrder: 3 },
-  { name: "Mega", tokens: 5000, price: 175000, sortOrder: 4 },
-];
+  // Base rate: ₦100/token (Starter = 100 × ₦100, no discount).
+  // Flat 2% discount on anything above the 100-token base pack.
+  const TOKEN_PACKAGES = [
+    { name: "Starter", tokens: 100, price: 10000, sortOrder: 1 },
+    { name: "Standard", tokens: 500, price: 49000, sortOrder: 2 },
+    { name: "Bulk", tokens: 2000, price: 196000, sortOrder: 3 },
+    { name: "Mega", tokens: 5000, price: 490000, sortOrder: 4 },
+  ];
 
 async function main() {
   for (const plan of CANONICAL) {

@@ -16,6 +16,7 @@ import { randomBytes } from "crypto";
 import { prisma } from "../config/prisma";
 import { tokenWalletService } from "./tokenWalletService";
 import { notifyPlatform } from "./platformNotificationService";
+import { getTokenPrice } from "./platformSettingsService";
 import {
   initializeCheckout,
   verifyPayment,
@@ -42,10 +43,33 @@ function generateReference(): string {
     .replace(/-/g, "")}-${randomBytes(5).toString("hex").toUpperCase()}`;
 }
 
-const initSchema = z.object({
-  packageId: z.string().min(1, "Choose a token package"),
-  customerPhone: z.string().max(20).optional(),
-});
+const initSchema = z
+  .object({
+    // Optional AND nullable — a custom-amount purchase sends only customTokens.
+    packageId: z.string().min(1).max(100).optional().nullable(),
+    // Custom purchase: school enters its own token quantity (priced at the
+    // platform token price instead of a fixed package).
+    customTokens: z
+      .number()
+      .int("Tokens must be a whole number")
+      .positive("Enter how many tokens you want")
+      .max(100000, "Contact support for purchases above 100,000 tokens")
+      .optional()
+      .nullable(),
+    customerPhone: z.string().max(20).optional(),
+  })
+  .refine((d) => (d.packageId && d.packageId.trim()) || (d.customTokens ?? 0) > 0, {
+    message: "Choose a token package or enter a custom token amount",
+    path: ["packageId"],
+  });
+
+/** Processing fee charged on every token purchase payment (0.9% of base). */
+export const TOKEN_FEE_RATE = 0.009;
+
+/** Round to 2dp (kobo) without floating-point drift. */
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
 
 /**
  * Step 1-7 of the purchase flow: create the pending transaction, then ask BIA
@@ -66,13 +90,32 @@ export async function startTokenCheckout(args: {
     );
   }
 
-  // Authoritative pricing: the package row, looked up fresh from the DB.
-  const pkg = await prisma.tokenPackage.findUnique({
-    where: { id: data.packageId },
-  });
-  if (!pkg || !pkg.isActive) {
-    throw new PaymentError("Selected token package is not available", 400);
+  // Authoritative pricing. Either a fixed package row, or a custom token
+  // quantity priced at the platform token price — BOTH resolved server-side
+  // (never from frontend numbers).
+  let pkg: { id: string; name: string; tokens: number; price: number } | null =
+    null;
+  let baseAmount: number;
+  let tokenQuantity: number;
+  if (data.packageId && data.packageId.trim()) {
+    const row = await prisma.tokenPackage.findUnique({
+      where: { id: data.packageId },
+    });
+    if (!row || !row.isActive) {
+      throw new PaymentError("Selected token package is not available", 400);
+    }
+    pkg = { id: row.id, name: row.name, tokens: row.tokens, price: row.price };
+    baseAmount = row.price;
+    tokenQuantity = row.tokens;
+  } else {
+    const tokenPrice = await getTokenPrice();
+    baseAmount = round2(data.customTokens! * tokenPrice);
+    tokenQuantity = data.customTokens!;
   }
+
+  // 0.9% processing fee on the payment, charged on top of the base price.
+  const feeAmount = round2(baseAmount * TOKEN_FEE_RATE);
+  const amount = round2(baseAmount + feeAmount);
 
   const school = await prisma.school.findUnique({
     where: { id: args.schoolId },
@@ -90,8 +133,6 @@ export async function startTokenCheckout(args: {
   if (!user.email)
     throw new PaymentError("Your account has no email for checkout", 400);
 
-  const amount = pkg.price; // NGN — from the DB, never the request body
-  const tokenQuantity = pkg.tokens;
   const internalReference = generateReference();
 
   // 1. Store the transaction as PENDING before hitting BIA.
@@ -99,11 +140,15 @@ export async function startTokenCheckout(args: {
     data: {
       schoolId: args.schoolId,
       userId: args.userId,
-      packageId: pkg.id,
+      packageId: pkg?.id,
       internalReference,
+      baseAmount,
+      feeAmount,
+      feeRate: TOKEN_FEE_RATE,
       amount,
       currency: "NGN",
       tokenQuantity,
+      isCustom: !pkg,
       status: "PENDING",
       customerEmail: user.email,
       customerName: user.name || school.name,
@@ -121,12 +166,13 @@ export async function startTokenCheckout(args: {
       customerPhone: data.customerPhone,
       reference: internalReference,
       callbackUrl: biaCallbackUrl(),
-      description: `SmartEdufy Edufy AI Token Purchase — ${pkg.name} (${tokenQuantity} tokens)`,
+      description: `SmartEdufy Edufy AI Token Purchase — ${pkg ? pkg.name : "Custom"} (${tokenQuantity} tokens)`,
       metadata: {
         purpose: "EDUFY_AI_TOKEN_PURCHASE",
         schoolId: args.schoolId,
         tokenQuantity,
-        packageId: pkg.id,
+        packageId: pkg?.id,
+        isCustom: !pkg,
       },
       expiresInMinutes: 60,
     });

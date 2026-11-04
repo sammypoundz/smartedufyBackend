@@ -15,6 +15,8 @@ import {
   PaymentError,
 } from "../services/biaPaymentService";
 import { biaConfigured } from "../services/biaService";
+import { TOKEN_FEE_RATE } from "../services/biaPaymentService";
+import { getTokenPrice } from "../services/platformSettingsService";
 import { logPlatformActivity } from "../services/platformAuditService";
 
 const router = Router();
@@ -82,8 +84,13 @@ router.get(
       orderBy: { sortOrder: "asc" },
       select: { id: true, name: true, tokens: true, price: true },
     });
+    const tokenPrice = await getTokenPrice();
     res.json({
       biaEnabled: biaConfigured(),
+      tokenPrice,
+      // Processing fee charged on every token payment (0.9% of the base
+      // price), so the purchase UI can show an exact breakdown.
+      feeRate: TOKEN_FEE_RATE,
       packages: pkgs,
     });
   }),

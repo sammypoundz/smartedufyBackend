@@ -1413,9 +1413,17 @@ model BiaPaymentTransaction {
   biaReference      String?   @unique
   merchantReference String? // second reference BIA echoes back
 
+  // Pricing: baseAmount is the token cost from TokenPackage (or custom amount
+  // priced at the platform token price); feeAmount is the processing charge
+  // (0.9% of base) added on top; amount = baseAmount + feeAmount is what the
+  // school actually pays and what BIA verification must match.
+  baseAmount        Float     @default(0) // NGN before the processing fee
+  feeAmount         Float     @default(0) // NGN processing fee (0.9%)
+  feeRate           Float     @default(0.009) // fee rate applied at purchase time
   amount            Float // NGN, calculated server-side from TokenPackage
   currency          String    @default("NGN")
   tokenQuantity     Int
+  isCustom          Boolean   @default(false) // true = school-entered token count
 
   status            String    @default("PENDING") // PENDING | SUCCESS | FAILED | EXPIRED | REVERSED
   authorizationUrl  String?
