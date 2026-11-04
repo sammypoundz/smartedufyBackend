@@ -86,16 +86,26 @@ router.get(
 );
 
 /**
- * Purchase flow:
- *  1. School picks a package (or custom amount) → POST /tokens/purchase with
- *     their preferred payment method + a bank-transfer reference.
- *  2. The wallet is credited immediately (tokens are usable right away) and a
- *     TOKEN_PURCHASE request is raised to the platform so FINANCE_ADMIN can
- *     verify the matching bank transfer. Unverified purchases show as
- *     "pending verification" on the school's ledger.
- *  3. If the transfer never lands, the platform can reverse it via
- *     POST /api/platform/wallets/:schoolId/adjust (negative, with a reason).
+ * DISABLED — this legacy endpoint credited tokens instantly on trust and only
+ * asked the finance team to verify the bank transfer afterwards. With the BIA
+ * CONNECT gateway live, that flow would allow crediting without a verified
+ * payment. All token purchases now go through POST /api/payments/bia/initialize
+ * (verified server-side before crediting). Platform admins can still credit
+ * wallets manually via POST /api/platform/wallets/:schoolId/purchase.
  */
+router.post(
+  "/purchase",
+  authMiddleware,
+  roleGuard(["ADMIN", "PRINCIPAL"]),
+  asyncRoute(async (_req: AuthRequest, res: Response) => {
+    res.status(410).json({
+      error:
+        "Manual token purchase has been replaced by secure online payment. Use the Top up button in Edufy AI → Tokens, which pays via BIA CONNECT.",
+    });
+  }),
+);
+
+/* Original trust-based flow (kept for reference, no longer routed):
 router.post(
   "/purchase",
   authMiddleware,
@@ -163,6 +173,7 @@ router.post(
     });
   }),
 );
+*/
 
 export default router;
 
