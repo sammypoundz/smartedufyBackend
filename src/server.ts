@@ -79,6 +79,11 @@ app.get('/api/health', (req, res) => {
 });
 app.use('/api/auth', authRoutes); // login, register, etc.
 
+// ---------- BIA CONNECT webhook — PUBLIC, must bypass auth/tenant ----------
+// (the webhook body is untrusted: it only triggers a server-side re-verify)
+import biaWebhookRoutes from './routes/paymentRoutes';
+app.use('/api/v1/webhooks', biaWebhookRoutes);
+
 // ---------- Super Admin console — SEPARATE auth realm ----------
 // Mounted BEFORE the global auth/tenant middleware: platform routes use their
 // own JWT realm (platformAuth) and platform users have no school tenant, so
@@ -127,6 +132,8 @@ app.use('/api/question-docs', questionDocRoutes);
 app.use('/api/offline', offlineRoutes);
 app.use('/api/ai-scan', aiScanRoutes);
 app.use('/api/tokens', tokenRoutes);
+import paymentRoutes from './routes/paymentRoutes';
+app.use('/api/payments', paymentRoutes);
 import timetableWorkflowRoutes from './routes/timetableWorkflowRoutes';
 import parentLinkRoutes from './routes/parentLinkRoutes';
 app.use('/api/timetable-workflow', timetableWorkflowRoutes);

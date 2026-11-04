@@ -55,6 +55,7 @@ model School {
   questions                 Question[]
   testAttempts              TestAttempt[]
   academicYears             AcademicYear[]
+  biaTransactions           BiaPaymentTransaction[]
   terms                     Term[]
   promotionHistories        StudentPromotionHistory[]
   inventoryItems            InventoryItem[]
@@ -93,6 +94,7 @@ model User {
   parent         Parent?
   teacher        Teacher?
   payrollEntries Payroll[]
+  biaTransactions BiaPaymentTransaction[]
   messagesSent   Message[]     @relation("sender")
   auditLogs      AuditLog[]
   questionDocs   QuestionDoc[]
@@ -1041,6 +1043,9 @@ model Subscription {
   // MONTHLY | QUARTERLY | TERMLY | HALF_YEARLY | ANNUAL
   // Price per cycle actually charged (allows per-school overrides of the plan price)
   pricePerCycle        Float?
+  // Per-school override of the plan's perStudentRate (STUDENT_BASED billing).
+  // null = fall back to plan.perStudentRate.
+  perStudentRateOverride Float?
   // Per-assignment token override. null = use the plan's default allowance.
   // Lets the super admin decide the bundled tokens (or zero) at assign time,
   // independent of the plan's own default.
@@ -1344,6 +1349,7 @@ model TokenPackage {
   updatedAt DateTime @updatedAt
 
   purchases PackagePurchase[]
+  biaTransactions BiaPaymentTransaction[]
 
   @@map("token_packages")
 }
@@ -1384,6 +1390,59 @@ model PackagePurchase {
   @@index([schoolId, createdAt])
   @@index([status])
   @@map("package_purchases")
+}
+
+// ---- BIA CONNECT hosted-checkout payment for Edufy AI token purchases ----
+// Created PENDING before the BIA checkout session is initialised. Tokens are
+// credited ONLY by biaPaymentService.fulfill(), which requires a successful
+// server-side BIA verification (amount, currency and references all matching).
+// Idempotency: fulfilment is guarded by a unique TokenLedger reference
+// (BIAPAY-<internalReference>), so duplicate webhooks / double verification /
+// simultaneous confirmations can never credit a wallet twice.
+model BiaPaymentTransaction {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId          String    @db.ObjectId
+  userId            String    @db.ObjectId // initiating user
+  packageId         String?   @db.ObjectId // token package chosen (null = legacy)
+
+  provider          String    @default("BIA")
+  purpose           String    @default("EDUFY_AI_TOKEN_PURCHASE")
+
+  // References — internalReference is ours, the others come from BIA.
+  internalReference String    @unique
+  biaReference      String?   @unique
+  merchantReference String? // second reference BIA echoes back
+
+  amount            Float // NGN, calculated server-side from TokenPackage
+  currency          String    @default("NGN")
+  tokenQuantity     Int
+
+  status            String    @default("PENDING") // PENDING | SUCCESS | FAILED | EXPIRED | REVERSED
+  authorizationUrl  String?
+  checkoutExpiresAt DateTime?
+
+  customerEmail     String?
+  customerName      String?
+  customerPhone     String?
+
+  paidAt            DateTime?
+  // Fulfilled = tokens credited to the wallet exactly once.
+  fulfilled         Boolean   @default(false)
+  fulfilledAt       DateTime?
+  fulfillAttempts   Int       @default(0)
+  lastFulfillError  String?
+
+  verificationLog   Json? // history of verify/webhook attempts (no secrets)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  school  School       @relation(fields: [schoolId], references: [id])
+  user    User         @relation(fields: [userId], references: [id])
+  package TokenPackage? @relation(fields: [packageId], references: [id])
+
+  @@index([schoolId, status])
+  @@index([createdAt])
+  @@map("bia_payment_transactions")
 }
 
 // ---- Invoice for a subscription cycle (PPS snapshot or fixed tier) ----

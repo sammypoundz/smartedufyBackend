@@ -896,13 +896,24 @@ router.get(
       include: { plan: true },
       orderBy: { endDate: "asc" },
     });
+    // Resolve school names in bulk (schoolId is a plain ObjectId reference).
+    const schoolIds = [...new Set(subs.map((s) => s.schoolId))];
+    const schools = await prisma.school.findMany({
+      where: { id: { in: schoolIds } },
+      select: { id: true, name: true },
+    });
+    const schoolNameById = new Map(schools.map((sc) => [sc.id, sc.name]));
     const withPayments = await Promise.all(
       subs.map(async (s) => {
         const paid = await prisma.subscriptionPayment.aggregate({
           _sum: { amount: true },
           where: { subscriptionId: s.id, verified: true },
         });
-        return { ...s, totalPaid: paid._sum.amount || 0 };
+        return {
+          ...s,
+          totalPaid: paid._sum.amount || 0,
+          schoolName: schoolNameById.get(s.schoolId) || "Unknown school",
+        };
       }),
     );
     res.json({
@@ -1451,6 +1462,80 @@ router.get(
   asyncRoute(async (req, res) => {
     const limit = Math.min(500, Number(req.query.limit) || 50);
     res.json(await tokenWalletService.ledger(String(req.params.schoolId), limit));
+  }),
+);
+
+// ============================================================
+// MODULE 7c — BIA CONNECT token-purchase analytics
+// Distinguishes BIA token revenue from subscription revenue.
+// ============================================================
+router.get(
+  "/payments/bia",
+  auth,
+  requirePlatformRole("SUPER_ADMIN", "FINANCE_ADMIN", "SUPPORT_OFFICER"),
+  asyncRoute(async (req, res) => {
+    const where: any = {};
+    if (req.query.schoolId) where.schoolId = String(req.query.schoolId);
+    if (req.query.status) where.status = String(req.query.status);
+    if (req.query.from || req.query.to) {
+      where.createdAt = {};
+      if (req.query.from) where.createdAt.gte = new Date(String(req.query.from));
+      if (req.query.to) where.createdAt.lte = new Date(String(req.query.to));
+    }
+    const txns = await prisma.biaPaymentTransaction.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    });
+    const schoolIds = [...new Set(txns.map((t) => t.schoolId))];
+    const schools = await prisma.school.findMany({
+      where: { id: { in: schoolIds } },
+      select: { id: true, name: true },
+    });
+    const nameMap = new Map(schools.map((s) => [s.id, s.name]));
+
+    const successful = txns.filter((t) => t.fulfilled);
+    const byDay: Record<string, number> = {};
+    for (const t of successful) {
+      const k = (t.paidAt || t.createdAt).toISOString().slice(0, 10);
+      byDay[k] = (byDay[k] || 0) + t.amount;
+    }
+    const bySchool: Record<string, number> = {};
+    for (const t of successful) {
+      const name = nameMap.get(t.schoolId) || t.schoolId;
+      bySchool[name] = (bySchool[name] || 0) + t.amount;
+    }
+    res.json({
+      totals: {
+        revenue: successful.reduce((s, t) => s + t.amount, 0),
+        successfulCount: successful.length,
+        pendingCount: txns.filter((t) => t.status === "PENDING").length,
+        failedCount: txns.filter((t) =>
+          ["FAILED", "EXPIRED", "REVERSED"].includes(t.status),
+        ).length,
+        tokensSold: successful.reduce((s, t) => s + t.tokenQuantity, 0),
+      },
+      revenueByDate: Object.entries(byDay)
+        .map(([date, revenue]) => ({ date, revenue }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+      revenueBySchool: Object.entries(bySchool)
+        .map(([school, revenue]) => ({ school, revenue }))
+        .sort((a, b) => b.revenue - a.revenue),
+      transactions: txns.slice(0, 200).map((t) => ({
+        id: t.id,
+        internalReference: t.internalReference,
+        biaReference: t.biaReference,
+        schoolName: nameMap.get(t.schoolId) || t.schoolId,
+        amount: t.amount,
+        tokenQuantity: t.tokenQuantity,
+        status: t.status,
+        fulfilled: t.fulfilled,
+        createdAt: t.createdAt,
+        paidAt: t.paidAt,
+      })),
+      note:
+        "BIA token-purchase revenue only — subscription revenue is reported separately under /platform/revenue.",
+    });
   }),
 );
 
