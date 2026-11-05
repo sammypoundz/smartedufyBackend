@@ -13,7 +13,7 @@
     "seed:goldenlight": "ts-node prisma/newSchoolSeed.ts"
   },
   "engines": {
-    "node": ">=20.0.0 <22.0.0"
+    "node": ">=22.12.0"
   },
   "keywords": [],
   "author": "",

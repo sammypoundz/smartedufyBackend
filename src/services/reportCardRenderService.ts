@@ -327,9 +327,15 @@ export async function renderPdf(
     marginMm?: { top: number; right: number; bottom: number; left: number };
   },
 ): Promise<Buffer> {
-  // Puppeteer v23+ is ESM-only; this module compiles to CommonJS, so use a
-  // true dynamic import() instead of a top-level require.
-  const puppeteer = (await import("puppeteer")).default ?? (await import("puppeteer"));
+  // Puppeteer v23+ is ESM-only; this module compiles to CommonJS. A literal
+  // `await import("puppeteer")` would be transpiled back into require() by
+  // tsc (module: "commonjs") and crash on ESM-only packages. Build the real
+  // dynamic import via Function so it survives compilation.
+  const dynamicImport: (specifier: string) => Promise<any> = new Function(
+    "specifier",
+    "return import(specifier);",
+  ) as any;
+  const puppeteer = await dynamicImport("puppeteer");
   const browser = await puppeteer.launch({
     headless: true,
     args: [
