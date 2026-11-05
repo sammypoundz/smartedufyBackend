@@ -13,6 +13,7 @@ import prisma from "../config/prisma";
 import type puppeteer from "puppeteer";
 import path from "path";
 import fs from "fs";
+import { uploadBuffer } from "./cloudinaryStorage";
 import {
   sanitizeTemplateHtml,
   sanitizeTemplateCss,
@@ -395,12 +396,14 @@ export async function generateReportCardPdf(opts: {
 
   const buffer = await renderPdf(boundHtml, pageConfig);
 
-  const safeName = `rc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`;
-  const filePath = path.join(REPORT_CARD_DIR, safeName);
-  fs.writeFileSync(filePath, Buffer.from(buffer as unknown as Uint8Array));
+  // Store the rendered PDF in Cloudinary (Render's disk is ephemeral).
+  const stored = await uploadBuffer(Buffer.from(buffer as unknown as Uint8Array), {
+    folder: "report-cards",
+    resourceType: "raw",
+  });
 
   return {
-    fileUrl: `/uploads/report-cards/${safeName}`,
+    fileUrl: stored.url,
     data,
     boundHtml,
   };

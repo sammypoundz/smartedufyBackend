@@ -8,6 +8,7 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import prisma from "../config/prisma";
+import { uploadBuffer, resolveStoredFile, fetchStoredFile } from "../services/cloudinaryStorage";
 import { authMiddleware, privilegeGuard } from "../middleware/auth";
 import { getCurrentTenantId } from "../utils/tenantContext";
 import {
@@ -21,6 +22,7 @@ import {
   regenerateTemplate,
 } from "../services/aiReportTemplateService";
 import { documentToPageImages } from "../services/pdfUtils";
+import { PDFDocument } from "pdf-lib";
 import {
   buildTemplateData,
   renderTemplateHtml,
@@ -33,18 +35,12 @@ void logAiUsage;
 const router = Router();
 
 // ============================ Upload storage ============================
-const TEMPLATE_DIR = "uploads/report-templates";
-if (!fs.existsSync(TEMPLATE_DIR))
-  fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
+// Files are held in memory only and pushed to Cloudinary (durable object
+// storage). Render's disk is ephemeral — local paths are never persisted
+// across deploys/restarts, so nothing is written to disk here.
 
 const templateUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, TEMPLATE_DIR),
-    filename: (_req, file, cb) => {
-      const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      cb(null, "tpl-" + unique + path.extname(file.originalname).toLowerCase());
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 }, // 15MB — matches question-doc policy
   fileFilter: (_req, file, cb) => {
     const ok = ["application/pdf", "image/png", "image/jpeg"].includes(
@@ -151,17 +147,19 @@ router.post(
       if (!name)
         return res.status(400).json({ error: "Template name is required" });
 
-      const ext = path.extname(file.filename).toLowerCase();
+      const ext = path.extname(file.originalname || "").toLowerCase();
       const mime =
         file.mimetype === "application/pdf"
           ? "pdf"
-          : ext === ".png"
+          : ext === ".png" || file.mimetype === "image/png"
             ? "png"
             : "jpg";
 
-      // PDFs keep their page count for the preview UI (parsed cheaply below
-      // during generation; for now count via pdf-lib header scan).
-      const pages = mime === "pdf" ? await countPdfPages(file.path) : 1;
+      // Upload to Cloudinary (durable); store the public URL in the DB.
+      const stored = await uploadBuffer(file.buffer, {
+        folder: "report-templates",
+        resourceType: mime === "pdf" ? "raw" : "image",
+      });
 
       const template = await reportTemplateService.createDraft({
         name,
@@ -171,27 +169,36 @@ router.post(
         academicLevel: req.body.academicLevel
           ? String(req.body.academicLevel)
           : undefined,
-        originalFileUrl: `/${file.path.replace(/\\/g, "/")}`,
+        originalFileUrl: stored.url,
         originalFileType: mime,
-        originalPages: pages,
+        originalPages: 1, // corrected below for PDFs
         createdBy: user.id,
         schoolId: tenantId,
       });
-      res.status(201).json(template);
+
+      // Count real page count for PDFs and persist it.
+      const pages =
+        mime === "pdf"
+          ? await countPdfPagesFromBuffer(file.buffer)
+          : 1;
+      if (mime === "pdf") {
+        await prisma.reportCardTemplate.update({
+          where: { id: template.id },
+          data: { originalPages: pages },
+        });
+      }
+
+      res.status(201).json({ ...template, originalPages: pages });
     } catch (err: any) {
       handleError(res, err, "Upload failed");
     }
   },
 );
 
-async function countPdfPages(filePath: string): Promise<number> {
-  try {
-    const { PDFDocument } = await import("pdf-lib");
-    const doc = await PDFDocument.load(fs.readFileSync(filePath));
-    return doc.getPageCount();
-  } catch {
-    return 1;
-  }
+function countPdfPagesFromBuffer(buf: Buffer): Promise<number> {
+  return PDFDocument.load(buf)
+    .then((doc) => doc.getPageCount())
+    .catch(() => 1);
 }
 
 function getString(v: any): string {
@@ -229,8 +236,7 @@ router.post(
       });
 
       try {
-        const absPath = path.join(process.cwd(), tpl.originalFileUrl);
-        const buffer = fs.readFileSync(absPath);
+        const { buffer } = await resolveStoredFile(tpl.originalFileUrl!);
         const mime =
           tpl.originalFileType === "pdf"
             ? "application/pdf"
@@ -292,8 +298,7 @@ router.post(
 
       const gate = await gateTokens(tenantId, 1, "REPORT_TEMPLATE");
       try {
-        const absPath = path.join(process.cwd(), tpl.originalFileUrl!);
-        const buffer = fs.readFileSync(absPath);
+        const { buffer } = await resolveStoredFile(tpl.originalFileUrl!);
         const mime =
           tpl.originalFileType === "pdf"
             ? "application/pdf"
@@ -371,8 +376,7 @@ router.post(
 
       const gate = await gateTokens(tenantId, 2, "REPORT_TEMPLATE");
       try {
-        const absPath = path.join(process.cwd(), tpl.originalFileUrl);
-        const buffer = fs.readFileSync(absPath);
+        const { buffer } = await resolveStoredFile(tpl.originalFileUrl);
         const mime =
           tpl.originalFileType === "pdf"
             ? "application/pdf"
@@ -972,15 +976,18 @@ router.get(
       );
       archive.pipe(res);
       for (const c of cards) {
-        const abs = path.join(process.cwd(), c.generatedFileUrl || "");
-        if (fs.existsSync(abs)) {
+        if (!c.generatedFileUrl) continue;
+        try {
+          const pdfBuffer = await resolveStoredFile(c.generatedFileUrl);
           const safe = String(c.student?.name || c.studentId).replace(
             /[^\w-]+/g,
             "_",
           );
-          archive.append(fs.readFileSync(abs), {
+          archive.append(pdfBuffer.buffer, {
             name: `${safe}_${c.studentId}.pdf`,
           });
+        } catch {
+          // skip files that no longer exist rather than failing the whole ZIP
         }
       }
       await archive.finalize();
@@ -1012,15 +1019,19 @@ router.get(
       });
       if (!card?.generatedFileUrl)
         return res.status(404).json({ error: "No generated report card" });
-      const abs = path.join(process.cwd(), card.generatedFileUrl);
-      if (!fs.existsSync(abs))
-        return res.status(404).json({ error: "File missing on disk" });
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="report-card.pdf"`,
-      );
-      fs.createReadStream(abs).pipe(res);
+      try {
+        const { buffer } = await resolveStoredFile(card.generatedFileUrl);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="report-card.pdf"`,
+        );
+        res.end(buffer);
+      } catch (err: any) {
+        res
+          .status(410)
+          .json({ error: err?.message || "Report card file unavailable" });
+      }
     } catch (err: any) {
       handleError(res, err, "Download failed");
     }
