@@ -19,6 +19,11 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "overrides": {
+    "sanitize-html": {
+      "htmlparser2": "^9.1.0"
+    }
+  },
   "dependencies": {
     "@napi-rs/canvas": "^1.1.0",
     "@prisma/client": "^5.22.0",

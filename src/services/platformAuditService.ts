@@ -15,10 +15,21 @@ export interface PlatformAuditInput {
 }
 
 export async function logPlatformActivity(input: PlatformAuditInput) {
+  // Some cron/background flows log under a synthetic actor (e.g. "system"),
+  // but actorId is a Mongo ObjectId column. If the value isn't a valid
+  // ObjectId, fall back to logging without it rather than crashing the write.
+  const isValidObjectId = (v: string) => /^[0-9a-fA-F]{24}$/.test(v);
+  let actorId = input.actorId;
+  if (!isValidObjectId(actorId)) {
+    if (!input.actorName) {
+      input.actorName = actorId; // preserve who/what triggered this
+    }
+    actorId = process.env.PLATFORM_AUDIT_SYSTEM_ID || "000000000000000000000000";
+  }
   try {
     await prisma.platformAuditLog.create({
       data: {
-        actorId: input.actorId,
+        actorId,
         actorName: input.actorName,
         actorRole: input.actorRole,
         action: input.action,

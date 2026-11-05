@@ -116,7 +116,8 @@ exports.billingService = {
             studentSnapshot = await prisma_1.prisma.student.count({
                 where: { schoolId, isActive: true },
             });
-            pricePerStudent = plan.perStudentRate ?? 0;
+            // Per-school override (set by super admin) takes precedence over plan rate
+            pricePerStudent = sub.perStudentRateOverride ?? plan.perStudentRate ?? 0;
             amount = studentSnapshot * pricePerStudent;
             description = `${plan.name} — ${studentSnapshot} students × ₦${pricePerStudent.toLocaleString()} (${frequency.toLowerCase()})`;
             await prisma_1.prisma.subscription.update({

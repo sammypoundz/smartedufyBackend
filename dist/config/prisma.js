@@ -17,6 +17,7 @@ const TENANT_MODELS = [
     'Test', 'Question', 'TestAttempt',
     'StudentPromotionHistory', 'AcademicYear', 'Term',
     'ParentStudentLink',
+    'ReportCardTemplate', 'ReportCardAssignment', 'GeneratedReportCard',
 ];
 const prisma = new client_1.PrismaClient();
 exports.prisma = prisma;

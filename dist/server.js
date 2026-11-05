@@ -44,6 +44,7 @@ const aiScanRoutes_1 = __importDefault(require("./routes/aiScanRoutes"));
 const platformRoutes_1 = __importDefault(require("./routes/platformRoutes"));
 const platformOnboardingRoutes_1 = __importDefault(require("./routes/platformOnboardingRoutes"));
 const tokenRoutes_1 = __importDefault(require("./routes/tokenRoutes"));
+const reportTemplateRoutes_1 = __importDefault(require("./routes/reportTemplateRoutes"));
 const billingService_1 = require("./services/billingService");
 // Import middleware
 const errorHandler_1 = require("./middleware/errorHandler");
@@ -73,6 +74,13 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'SmartEdufy API is running' });
 });
 app.use('/api/auth', auth_1.default); // login, register, etc.
+// ---------- BIA CONNECT webhook — PUBLIC, must bypass auth/tenant ----------
+// (the webhook body is untrusted: it only triggers a server-side re-verify)
+const paymentRoutes_1 = __importDefault(require("./routes/paymentRoutes"));
+// mounted at /api/v1 so the router's '/webhooks/bia' path resolves to
+// /api/v1/webhooks/bia — the same router is also mounted at /api/payments
+// below for the authenticated payment endpoints.
+app.use('/api/v1', paymentRoutes_1.default);
 // ---------- Super Admin console — SEPARATE auth realm ----------
 // Mounted BEFORE the global auth/tenant middleware: platform routes use their
 // own JWT realm (platformAuth) and platform users have no school tenant, so
@@ -118,10 +126,13 @@ app.use('/api/question-docs', questionDocRoutes_1.default);
 app.use('/api/offline', offlineRoutes_1.default);
 app.use('/api/ai-scan', aiScanRoutes_1.default);
 app.use('/api/tokens', tokenRoutes_1.default);
+const paymentRoutes_2 = __importDefault(require("./routes/paymentRoutes"));
+app.use('/api/payments', paymentRoutes_2.default);
 const timetableWorkflowRoutes_1 = __importDefault(require("./routes/timetableWorkflowRoutes"));
 const parentLinkRoutes_1 = __importDefault(require("./routes/parentLinkRoutes"));
 app.use('/api/timetable-workflow', timetableWorkflowRoutes_1.default);
 app.use('/api/parent-links', parentLinkRoutes_1.default);
+app.use('/api', reportTemplateRoutes_1.default); // /api/report-templates + /api/report-cards
 // Error handler
 app.use(errorHandler_1.errorHandler);
 app.listen(port, () => {
