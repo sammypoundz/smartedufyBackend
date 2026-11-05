@@ -68,6 +68,10 @@ model School {
   reportCardTemplates ReportCardTemplate[]
   bankDetail          BankDetail? // one-to-one (unique constraint on schoolId)
   idGeneratorConfigs  IdGeneratorConfig[]
+
+  // AI Report Designer
+  reportCardAssignments  ReportCardAssignment[]
+  generatedReportCards   GeneratedReportCard[]
 }
 
 // ========== USER ==========
@@ -137,6 +141,7 @@ model Student {
   feePayments      FeePayment[]
   assignedFees     StudentFee[]
   linkRequests     ParentStudentLink[]
+  generatedReportCards GeneratedReportCard[]
 }
 
 // ========== PARENT ==========
@@ -841,6 +846,10 @@ model PromotionRule {
 }
 
 // ========== REPORT CARD TEMPLATE ==========
+// Legacy fields (name/description/isDefault) are used by the Settings page.
+// The AI Report Designer feature extends this same model — do NOT create a
+// separate designer template model. AI-generated content lives in the
+// ai*Json blocks (raw JSON stored as Strings to stay schema-flexible).
 model ReportCardTemplate {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   schoolId    String   @db.ObjectId
@@ -848,10 +857,92 @@ model ReportCardTemplate {
   name        String
   description String?
   isDefault   Boolean  @default(false)
+
+  // ---- AI Report Designer fields ----
+  status             String  @default("DRAFT") // DRAFT | PROCESSING | GENERATED | AWAITING_APPROVAL | APPROVED | ARCHIVED | FAILED
+  academicLevel      String? // PRIMARY | JUNIOR_SECONDARY | SENIOR_SECONDARY | NURSERY | OTHER
+  originalFileUrl    String? // preserved upload (local uploads/report-templates/... or Cloudinary)
+  originalFileType   String? // pdf | png | jpg
+  originalPages      Int?    // page count for PDFs / 1 for images
+  htmlTemplate       String? // approved/generated HTML with data placeholders
+  cssTemplate        String? // approved/generated CSS (kept separate from HTML)
+  fieldMappings      String? // JSON: placeholder -> data-source binding map
+  tableConfigurations String? // JSON: subject-table column order / dynamic-row config
+  pageConfigurations String? // JSON: page size, orientation, margins, multi-page breaks
+  aiProvider         String? // e.g. gemini
+  aiModel            String? // e.g. gemini-3.5-flash
+  generationMetadata String? // JSON: prompts, timings, page images used, warnings
+  generationError    String? // last generation failure message (FAILED status)
+  version            Int     @default(1)
+  previousVersions   String? // JSON array of {version, html, css, savedAt, note}
+  approvedBy         String? @db.ObjectId
+  approvedAt         DateTime?
+  createdBy          String? @db.ObjectId
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  assignments    ReportCardAssignment[]
+  generatedCards GeneratedReportCard[]
+
+  @@index([schoolId, status])
   @@map("report_card_templates")
+}
+
+// ========== REPORT CARD TEMPLATE ASSIGNMENT ==========
+// Binds an APPROVED template to classes. assignmentType:
+//   ALL_TERMS  — applies to every term of the given session
+//   SPECIFIC_TERM — applies only to the named term of the session
+// Resolution rule (reportTemplateService.resolveTemplateForClass):
+//   specific-term match wins over all-terms match; latest createdAt breaks ties.
+model ReportCardAssignment {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId          String   @db.ObjectId
+  school            School   @relation(fields: [schoolId], references: [id])
+  templateId        String   @db.ObjectId
+  template          ReportCardTemplate @relation(fields: [templateId], references: [id])
+  classIds          String[] // class ObjectIds; classes belong to this school
+  academicSessionId String   @db.ObjectId // AcademicYear
+  term              String?  // required when assignmentType = SPECIFIC_TERM
+  assignmentType    String   @default("ALL_TERMS")
+  isActive          Boolean  @default(true)
+  assignedBy        String?  @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId, templateId])
+  @@index([schoolId, academicSessionId])
+}
+
+// ========== GENERATED REPORT CARD ==========
+// One row per rendered student PDF. Historical rows are never mutated when a
+// template changes — regeneration creates a NEW row (business rule 9).
+model GeneratedReportCard {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId          String   @db.ObjectId
+  school            School   @relation(fields: [schoolId], references: [id])
+  studentId         String   @db.ObjectId
+  student           Student  @relation(fields: [studentId], references: [id])
+  classId           String   @db.ObjectId
+  templateId        String   @db.ObjectId
+  template          ReportCardTemplate @relation(fields: [templateId], references: [id])
+  templateVersion   Int
+  academicSessionId String   @db.ObjectId
+  term              String
+  generatedFileUrl  String?  // local path under uploads/report-cards (served by express.static)
+  generationStatus  String   @default("PENDING") // PENDING | DONE | FAILED
+  generationError   String?
+  generatedAt       DateTime?
+  generatedBy       String?  @db.ObjectId
+  publishedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, academicSessionId, term]) // one current card per student/term; regen replaces the row
+  @@index([schoolId, classId])
+  @@index([templateId])
 }
 
 // ========== ID GENERATOR ==========

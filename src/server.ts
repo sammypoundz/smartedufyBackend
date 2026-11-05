@@ -40,6 +40,7 @@ import aiScanRoutes from './routes/aiScanRoutes';
 import platformRoutes from './routes/platformRoutes';
 import platformOnboardingRoutes from './routes/platformOnboardingRoutes';
 import tokenRoutes from './routes/tokenRoutes';
+import reportTemplateRoutes from './routes/reportTemplateRoutes';
 import { billingService } from './services/billingService';
 
 
@@ -141,6 +142,7 @@ import timetableWorkflowRoutes from './routes/timetableWorkflowRoutes';
 import parentLinkRoutes from './routes/parentLinkRoutes';
 app.use('/api/timetable-workflow', timetableWorkflowRoutes);
 app.use('/api/parent-links', parentLinkRoutes);
+app.use('/api', reportTemplateRoutes); // /api/report-templates + /api/report-cards
 
 // Error handler
 app.use(errorHandler);
