@@ -66,7 +66,13 @@ app.use((req, res, next) => {
     console.log(`${req.method} ${req.url}`);
     next();
 });
-app.use(express_1.default.json());
+app.use(express_1.default.json({
+    // Capture the raw body for webhook HMAC verification (Paystack signs the
+    // exact bytes sent; a re-serialized JSON string would not match).
+    verify: (req, _res, buf) => {
+        req.rawBody = Buffer.from(buf);
+    },
+}));
 // Serve uploaded files
 app.use('/uploads', express_1.default.static(path_1.default.join(__dirname, '../uploads')));
 // ---------- Public routes (no authentication required) ----------
@@ -74,11 +80,12 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'SmartEdufy API is running' });
 });
 app.use('/api/auth', auth_1.default); // login, register, etc.
-// ---------- BIA CONNECT webhook — PUBLIC, must bypass auth/tenant ----------
-// (the webhook body is untrusted: it only triggers a server-side re-verify)
+// ---------- Paystack webhook — PUBLIC, must bypass auth/tenant ----------
+// (the webhook body is HMAC-verified with PAYSTACK_SECRET_KEY, then only
+// triggers a server-side re-verify — it can never credit tokens directly)
 const paymentRoutes_1 = __importDefault(require("./routes/paymentRoutes"));
-// mounted at /api/v1 so the router's '/webhooks/bia' path resolves to
-// /api/v1/webhooks/bia — the same router is also mounted at /api/payments
+// mounted at /api/v1 so the router's '/webhooks/paystack' path resolves to
+// /api/v1/webhooks/paystack — the same router is also mounted at /api/payments
 // below for the authenticated payment endpoints.
 app.use('/api/v1', paymentRoutes_1.default);
 // ---------- Super Admin console — SEPARATE auth realm ----------

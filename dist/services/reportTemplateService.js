@@ -123,6 +123,7 @@ exports.reportTemplateService = {
                 originalFileType: input.originalFileType,
                 originalPages: input.originalPages,
                 createdBy: input.createdBy,
+                schoolId: input.schoolId,
                 isDefault: false,
             },
         });

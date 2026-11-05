@@ -42,31 +42,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const multer_1 = __importDefault(require("multer"));
-const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const prisma_1 = __importDefault(require("../config/prisma"));
+const cloudinaryStorage_1 = require("../services/cloudinaryStorage");
 const auth_1 = require("../middleware/auth");
 const tenantContext_1 = require("../utils/tenantContext");
 const reportTemplateService_1 = require("../services/reportTemplateService");
 const aiReportTemplateService_1 = require("../services/aiReportTemplateService");
 const pdfUtils_1 = require("../services/pdfUtils");
+const pdf_lib_1 = require("pdf-lib");
 const reportCardRenderService_1 = require("../services/reportCardRenderService");
 const tokenGate_1 = require("../services/tokenGate");
 const aiUsageService_1 = require("../services/aiUsageService");
 void aiUsageService_1.logAiUsage;
 const router = (0, express_1.Router)();
 // ============================ Upload storage ============================
-const TEMPLATE_DIR = "uploads/report-templates";
-if (!fs_1.default.existsSync(TEMPLATE_DIR))
-    fs_1.default.mkdirSync(TEMPLATE_DIR, { recursive: true });
+// Files are held in memory only and pushed to Cloudinary (durable object
+// storage). Render's disk is ephemeral — local paths are never persisted
+// across deploys/restarts, so nothing is written to disk here.
 const templateUpload = (0, multer_1.default)({
-    storage: multer_1.default.diskStorage({
-        destination: (_req, _file, cb) => cb(null, TEMPLATE_DIR),
-        filename: (_req, file, cb) => {
-            const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-            cb(null, "tpl-" + unique + path_1.default.extname(file.originalname).toLowerCase());
-        },
-    }),
+    storage: multer_1.default.memoryStorage(),
     limits: { fileSize: 15 * 1024 * 1024 }, // 15MB — matches question-doc policy
     fileFilter: (_req, file, cb) => {
         const ok = ["application/pdf", "image/png", "image/jpeg"].includes(file.mimetype);
@@ -82,11 +77,17 @@ function requireAuth(req) {
         throw Object.assign(new Error("Unauthorized"), { status: 401 });
     return req.user;
 }
-function requireTenant() {
+function requireTenant(req) {
     const tenantId = (0, tenantContext_1.getCurrentTenantId)();
-    if (!tenantId)
-        throw Object.assign(new Error("Tenant context missing"), { status: 400 });
-    return tenantId;
+    if (tenantId)
+        return tenantId;
+    // Multer's multipart stream parsing runs outside the AsyncLocalStorage
+    // tenant context, so upload handlers lose it. Fall back to the JWT's
+    // schoolId (already verified by authMiddleware/tenantMiddleware).
+    const fallback = req?.user?.schoolId;
+    if (fallback)
+        return fallback;
+    throw Object.assign(new Error("Tenant context missing"), { status: 400 });
 }
 function handleError(res, err, fallback = "Request failed") {
     const status = err?.status || 500;
@@ -130,7 +131,7 @@ router.get("/report-templates/:id", auth_1.authMiddleware, (0, auth_1.privilegeG
 router.post("/report-templates/upload", auth_1.authMiddleware, (0, auth_1.privilegeGuard)("reports"), templateUpload.single("file"), async (req, res) => {
     try {
         const user = requireAuth(req);
-        requireTenant();
+        const tenantId = requireTenant(req);
         const file = req.file;
         if (!file)
             return res
@@ -139,15 +140,17 @@ router.post("/report-templates/upload", auth_1.authMiddleware, (0, auth_1.privil
         const name = String(req.body.name || "").trim();
         if (!name)
             return res.status(400).json({ error: "Template name is required" });
-        const ext = path_1.default.extname(file.filename).toLowerCase();
+        const ext = path_1.default.extname(file.originalname || "").toLowerCase();
         const mime = file.mimetype === "application/pdf"
             ? "pdf"
-            : ext === ".png"
+            : ext === ".png" || file.mimetype === "image/png"
                 ? "png"
                 : "jpg";
-        // PDFs keep their page count for the preview UI (parsed cheaply below
-        // during generation; for now count via pdf-lib header scan).
-        const pages = mime === "pdf" ? await countPdfPages(file.path) : 1;
+        // Upload to Cloudinary (durable); store the public URL in the DB.
+        const stored = await (0, cloudinaryStorage_1.uploadBuffer)(file.buffer, {
+            folder: "report-templates",
+            resourceType: mime === "pdf" ? "raw" : "image",
+        });
         const template = await reportTemplateService_1.reportTemplateService.createDraft({
             name,
             description: req.body.description
@@ -156,26 +159,32 @@ router.post("/report-templates/upload", auth_1.authMiddleware, (0, auth_1.privil
             academicLevel: req.body.academicLevel
                 ? String(req.body.academicLevel)
                 : undefined,
-            originalFileUrl: `/${file.path.replace(/\\/g, "/")}`,
+            originalFileUrl: stored.url,
             originalFileType: mime,
-            originalPages: pages,
+            originalPages: 1, // corrected below for PDFs
             createdBy: user.id,
+            schoolId: tenantId,
         });
-        res.status(201).json(template);
+        // Count real page count for PDFs and persist it.
+        const pages = mime === "pdf"
+            ? await countPdfPagesFromBuffer(file.buffer)
+            : 1;
+        if (mime === "pdf") {
+            await prisma_1.default.reportCardTemplate.update({
+                where: { id: template.id },
+                data: { originalPages: pages },
+            });
+        }
+        res.status(201).json({ ...template, originalPages: pages });
     }
     catch (err) {
         handleError(res, err, "Upload failed");
     }
 });
-async function countPdfPages(filePath) {
-    try {
-        const { PDFDocument } = await Promise.resolve().then(() => __importStar(require("pdf-lib")));
-        const doc = await PDFDocument.load(fs_1.default.readFileSync(filePath));
-        return doc.getPageCount();
-    }
-    catch {
-        return 1;
-    }
+function countPdfPagesFromBuffer(buf) {
+    return pdf_lib_1.PDFDocument.load(buf)
+        .then((doc) => doc.getPageCount())
+        .catch(() => 1);
 }
 function getString(v) {
     if (typeof v !== "string")
@@ -207,8 +216,7 @@ router.post("/report-templates/:id/generate", auth_1.authMiddleware, (0, auth_1.
             data: { status: "PROCESSING" },
         });
         try {
-            const absPath = path_1.default.join(process.cwd(), tpl.originalFileUrl);
-            const buffer = fs_1.default.readFileSync(absPath);
+            const { buffer } = await (0, cloudinaryStorage_1.resolveStoredFile)(tpl.originalFileUrl);
             const mime = tpl.originalFileType === "pdf"
                 ? "application/pdf"
                 : tpl.originalFileType === "png"
@@ -254,8 +262,7 @@ router.post("/report-templates/:id/correct", auth_1.authMiddleware, (0, auth_1.p
             return res.status(400).json({ error: "Generate the template first" });
         const gate = await (0, tokenGate_1.gateTokens)(tenantId, 1, "REPORT_TEMPLATE");
         try {
-            const absPath = path_1.default.join(process.cwd(), tpl.originalFileUrl);
-            const buffer = fs_1.default.readFileSync(absPath);
+            const { buffer } = await (0, cloudinaryStorage_1.resolveStoredFile)(tpl.originalFileUrl);
             const mime = tpl.originalFileType === "pdf"
                 ? "application/pdf"
                 : tpl.originalFileType === "png"
@@ -315,8 +322,7 @@ router.post("/report-templates/:id/regenerate", auth_1.authMiddleware, (0, auth_
             return res.status(404).json({ error: "Template not found" });
         const gate = await (0, tokenGate_1.gateTokens)(tenantId, 2, "REPORT_TEMPLATE");
         try {
-            const absPath = path_1.default.join(process.cwd(), tpl.originalFileUrl);
-            const buffer = fs_1.default.readFileSync(absPath);
+            const { buffer } = await (0, cloudinaryStorage_1.resolveStoredFile)(tpl.originalFileUrl);
             const mime = tpl.originalFileType === "pdf"
                 ? "application/pdf"
                 : tpl.originalFileType === "png"
@@ -361,7 +367,7 @@ router.post("/report-templates/:id/approve", auth_1.authMiddleware, (0, auth_1.p
 /** PUT /api/report-templates/:id — rename / edit metadata. */
 router.put("/report-templates/:id", auth_1.authMiddleware, (0, auth_1.privilegeGuard)("reports"), async (req, res) => {
     try {
-        requireTenant();
+        requireTenant(req);
         const data = {};
         if (req.body.name)
             data.name = String(req.body.name);
@@ -379,7 +385,7 @@ router.put("/report-templates/:id", auth_1.authMiddleware, (0, auth_1.privilegeG
 /** POST /api/report-templates/:id/archive */
 router.post("/report-templates/:id/archive", auth_1.authMiddleware, (0, auth_1.privilegeGuard)("reports"), async (req, res) => {
     try {
-        requireTenant();
+        requireTenant(req);
         const updated = await reportTemplateService_1.reportTemplateService.archive(getString(req.params.id));
         res.json(updated);
     }
@@ -390,7 +396,7 @@ router.post("/report-templates/:id/archive", auth_1.authMiddleware, (0, auth_1.p
 /** DELETE /api/report-templates/:id */
 router.delete("/report-templates/:id", auth_1.authMiddleware, (0, auth_1.privilegeGuard)("reports"), async (req, res) => {
     try {
-        requireTenant();
+        requireTenant(req);
         await reportTemplateService_1.reportTemplateService.delete(getString(req.params.id));
         res.json({ success: true });
     }
@@ -792,12 +798,17 @@ router.get("/report-cards/class/:classId/download-all", auth_1.authMiddleware, (
         res.setHeader("Content-Disposition", `attachment; filename="report-cards-${term}.zip"`);
         archive.pipe(res);
         for (const c of cards) {
-            const abs = path_1.default.join(process.cwd(), c.generatedFileUrl || "");
-            if (fs_1.default.existsSync(abs)) {
+            if (!c.generatedFileUrl)
+                continue;
+            try {
+                const pdfBuffer = await (0, cloudinaryStorage_1.resolveStoredFile)(c.generatedFileUrl);
                 const safe = String(c.student?.name || c.studentId).replace(/[^\w-]+/g, "_");
-                archive.append(fs_1.default.readFileSync(abs), {
+                archive.append(pdfBuffer.buffer, {
                     name: `${safe}_${c.studentId}.pdf`,
                 });
+            }
+            catch {
+                // skip files that no longer exist rather than failing the whole ZIP
             }
         }
         await archive.finalize();
@@ -824,12 +835,17 @@ router.get("/report-cards/student/:studentId/file", auth_1.authMiddleware, (0, a
         });
         if (!card?.generatedFileUrl)
             return res.status(404).json({ error: "No generated report card" });
-        const abs = path_1.default.join(process.cwd(), card.generatedFileUrl);
-        if (!fs_1.default.existsSync(abs))
-            return res.status(404).json({ error: "File missing on disk" });
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", `inline; filename="report-card.pdf"`);
-        fs_1.default.createReadStream(abs).pipe(res);
+        try {
+            const { buffer } = await (0, cloudinaryStorage_1.resolveStoredFile)(card.generatedFileUrl);
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `inline; filename="report-card.pdf"`);
+            res.end(buffer);
+        }
+        catch (err) {
+            res
+                .status(410)
+                .json({ error: err?.message || "Report card file unavailable" });
+        }
     }
     catch (err) {
         handleError(res, err, "Download failed");

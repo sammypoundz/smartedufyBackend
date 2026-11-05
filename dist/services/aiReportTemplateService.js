@@ -129,39 +129,52 @@ async function callGemini(prompt, pages, opts) {
     const started = Date.now();
     let lastErr = null;
     for (const model of GEMINI_MODELS) {
-        try {
-            const resp = await fetch(`${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-            if (!resp.ok) {
-                const detail = await resp.text().catch(() => "");
-                console.error(`Gemini API error (${model}):`, resp.status, detail.slice(0, 400));
-                lastErr = Object.assign(new Error(`AI request failed (status ${resp.status}).`), { status: 502 });
-                continue;
+        // Transient Google-side errors (429 rate-limit, 500/503 overloaded)
+        // are retried with a short backoff before falling through to the
+        // next model.
+        const RETRYABLE = new Set([429, 500, 503]);
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const resp = await fetch(`${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+                if (!resp.ok) {
+                    const detail = await resp.text().catch(() => "");
+                    console.error(`Gemini API error (${model}):`, resp.status, detail.slice(0, 400));
+                    lastErr = Object.assign(new Error(resp.status === 503
+                        ? "AI model is temporarily overloaded. Please retry in a moment."
+                        : `AI request failed (status ${resp.status}).`), { status: resp.status === 503 ? 503 : 502 });
+                    if (RETRYABLE.has(resp.status) && attempt < 2) {
+                        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+                        continue;
+                    }
+                    break; // move to the next model
+                }
+                const data = await resp.json();
+                const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+                if (!text) {
+                    lastErr = Object.assign(new Error("AI returned no readable content."), { status: 422 });
+                    continue;
+                }
+                // usage / cost logging through the existing tracking system
+                const usage = data?.usageMetadata || {};
+                (0, aiUsageService_1.logAiUsage)({
+                    schoolId: opts.schoolId,
+                    userId: opts.userId,
+                    operation: opts.operation,
+                    provider: "gemini",
+                    model,
+                    status: "SUCCESS",
+                    requests: 1,
+                    inputTokens: usage.promptTokenCount,
+                    outputTokens: usage.candidatesTokenCount,
+                    costUsd: (0, aiUsageService_1.estimateCostUsd)(model, usage.promptTokenCount || 0, usage.candidatesTokenCount || 0),
+                    processingMs: Date.now() - started,
+                }).catch(() => { });
+                return text;
             }
-            const data = await resp.json();
-            const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-            if (!text) {
-                lastErr = Object.assign(new Error("AI returned no readable content."), { status: 422 });
-                continue;
+            catch (err) {
+                lastErr = err;
+                break;
             }
-            // usage / cost logging through the existing tracking system
-            const usage = data?.usageMetadata || {};
-            (0, aiUsageService_1.logAiUsage)({
-                schoolId: opts.schoolId,
-                userId: opts.userId,
-                operation: opts.operation,
-                provider: "gemini",
-                model,
-                status: "SUCCESS",
-                requests: 1,
-                inputTokens: usage.promptTokenCount,
-                outputTokens: usage.candidatesTokenCount,
-                costUsd: (0, aiUsageService_1.estimateCostUsd)(model, usage.promptTokenCount || 0, usage.candidatesTokenCount || 0),
-                processingMs: Date.now() - started,
-            }).catch(() => { });
-            return text;
-        }
-        catch (err) {
-            lastErr = err;
         }
     }
     (0, aiUsageService_1.logAiUsage)({

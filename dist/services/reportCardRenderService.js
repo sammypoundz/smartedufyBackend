@@ -9,6 +9,39 @@
 //    template's page configuration (A4/letter, portrait/landscape, margins).
 //
 // No arbitrary DB access: only the fixed schema placeholders are bound.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -18,9 +51,8 @@ exports.renderTemplateHtml = renderTemplateHtml;
 exports.renderPdf = renderPdf;
 exports.generateReportCardPdf = generateReportCardPdf;
 const prisma_1 = __importDefault(require("../config/prisma"));
-const puppeteer_1 = __importDefault(require("puppeteer"));
-const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+const cloudinaryStorage_1 = require("./cloudinaryStorage");
 const reportTemplateService_1 = require("./reportTemplateService");
 const REPORT_CARD_DIR = "uploads/report-cards";
 if (!fs_1.default.existsSync(REPORT_CARD_DIR))
@@ -240,7 +272,10 @@ function renderTemplateHtml(template, data) {
 }
 /** Render bound HTML to PDF with Puppeteer using the template's page config. */
 async function renderPdf(boundHtml, pageConfig) {
-    const browser = await puppeteer_1.default.launch({
+    // Puppeteer v23+ is ESM-only; this module compiles to CommonJS, so use a
+    // true dynamic import() instead of a top-level require.
+    const puppeteer = (await Promise.resolve().then(() => __importStar(require("puppeteer")))).default ?? (await Promise.resolve().then(() => __importStar(require("puppeteer"))));
+    const browser = await puppeteer.launch({
         headless: true,
         args: [
             "--no-sandbox",
@@ -293,11 +328,13 @@ async function generateReportCardPdf(opts) {
         /* default */
     }
     const buffer = await renderPdf(boundHtml, pageConfig);
-    const safeName = `rc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`;
-    const filePath = path_1.default.join(REPORT_CARD_DIR, safeName);
-    fs_1.default.writeFileSync(filePath, Buffer.from(buffer));
+    // Store the rendered PDF in Cloudinary (Render's disk is ephemeral).
+    const stored = await (0, cloudinaryStorage_1.uploadBuffer)(Buffer.from(buffer), {
+        folder: "report-cards",
+        resourceType: "raw",
+    });
     return {
-        fileUrl: `/uploads/report-cards/${safeName}`,
+        fileUrl: stored.url,
         data,
         boundHtml,
     };

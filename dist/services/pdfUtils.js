@@ -1,12 +1,4 @@
 "use strict";
-// PDF & image processing utilities for the AI Report Designer.
-// - pdfToPageImages: rasterise each PDF page to a compressed PNG (base64) so
-//   the vision model can analyse multi-page report cards.
-// - Direct images (JPG/PNG) pass through (optionally downscaled to keep the
-//   Gemini payload small).
-//
-// pdfjs-dist v4 is ESM-only under the hood; we load the legacy build through
-// require to stay compatible with the project's CommonJS ts-node setup.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -40,16 +32,58 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documentToPageImages = documentToPageImages;
 exports.inferPageOrientation = inferPageOrientation;
-let pdfjsLib = null;
-function getPdfjs() {
-    if (!pdfjsLib) {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
+// PDF & image processing utilities for the AI Report Designer.
+// - pdfToPageImages: rasterise each PDF page to a compressed PNG (base64) so
+//   the vision model can analyse multi-page report cards.
+// - Direct images (JPG/PNG) pass through (optionally downscaled to keep the
+//   Gemini payload small).
+//
+const path_1 = __importDefault(require("path"));
+// pdfjs-dist v4 ships ONLY as an ES Module (.mjs). CommonJS `require()`
+// cannot load an ESM file — Node throws "require() of ES Module ... not
+// supported". It MUST be loaded with a dynamic import(), which works from
+// CommonJS code in every Node version that supports ESM at all.
+let pdfjsLibPromise = null;
+// NOTE: we must NOT write `import("...")` literally here — with
+// tsconfig `module: "commonjs"`, tsc transpiles dynamic import() into
+// require(), which crashes on ESM-only packages (the exact Render error).
+// Constructing the import via Function keeps it a REAL dynamic import at
+// runtime regardless of how tsc compiles the rest of the file.
+const dynamicImport = new Function("specifier", "return import(specifier);");
+async function getPdfjs() {
+    if (!pdfjsLibPromise) {
+        // pdfjs' legacy build renders text via the GLOBAL Path2D/DOMMatrix. In a
+        // bare Node process those globals don't exist, so pdfjs installs its own
+        // JS polyfill — which @napi-rs/canvas' native ctx.fill() does NOT accept
+        // ("The provided value '[object Object]' is not a valid enum value of
+        // type CanvasFillRule"). Pre-seed the globals with the real native
+        // implementations BEFORE the module is imported.
+        const g = globalThis;
+        try {
+            const napi = require("@napi-rs/canvas");
+            if (!g.Path2D)
+                g.Path2D = napi.Path2D;
+            if (!g.DOMMatrix)
+                g.DOMMatrix = napi.DOMMatrix;
+            if (!g.ImageData)
+                g.ImageData = napi.ImageData;
+        }
+        catch {
+            /* @napi-rs/canvas missing — pdfjs falls back to its polyfills */
+        }
+        // Cache the import promise so concurrent calls share one module load.
+        pdfjsLibPromise = dynamicImport("pdfjs-dist/legacy/build/pdf.mjs").catch((e) => {
+            pdfjsLibPromise = null; // allow a retry on a transient failure
+            throw e;
+        });
     }
-    return pdfjsLib;
+    return pdfjsLibPromise;
 }
 // pdfjs needs a canvas implementation in Node; use @napi-rs/canvas if present,
 // otherwise rely on pdfjs' built-in Node canvas factory fallback.
@@ -109,24 +143,30 @@ async function resizeToDataUrl(canvas, scale) {
  */
 async function documentToPageImages(buffer, mimeType) {
     if (mimeType === "application/pdf") {
-        const pdfjs = getPdfjs();
+        const pdfjs = await getPdfjs();
         const doc = await pdfjs.getDocument({
             data: new Uint8Array(buffer),
             useSystemFonts: true,
+            // Ship pdfjs' bundled standard-font data so Helvetica etc. render
+            // instead of "Ensure that the `standardFontDataUrl` API parameter is
+            // provided" warnings and missing glyphs.
+            standardFontDataUrl: path_1.default.join(path_1.default.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + path_1.default.sep,
+            cMapUrl: path_1.default.join(path_1.default.dirname(require.resolve("pdfjs-dist/package.json")), "cmaps") + path_1.default.sep,
+            cMapPacked: true,
         }).promise;
         const total = Math.min(doc.numPages, MAX_TOTAL_PAGES);
         const pages = [];
         const factory = getCanvasFactory();
+        const factoryInstance = factory ? new factory() : null;
         for (let i = 1; i <= total; i++) {
             const page = await doc.getPage(i);
             const viewport = page.getViewport({ scale: 2 });
             let canvasObj;
-            if (factory) {
-                canvasObj = factory.create(viewport.width, viewport.height);
+            if (factoryInstance) {
+                canvasObj = factoryInstance.create(viewport.width, viewport.height);
                 await page.render({
                     canvasContext: canvasObj.context,
                     viewport,
-                    canvasFactory: factory,
                 }).promise;
             }
             else {
