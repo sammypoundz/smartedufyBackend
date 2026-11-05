@@ -10,7 +10,7 @@
 // No arbitrary DB access: only the fixed schema placeholders are bound.
 
 import prisma from "../config/prisma";
-import puppeteer from "puppeteer";
+import type puppeteer from "puppeteer";
 import path from "path";
 import fs from "fs";
 import {
@@ -326,6 +326,9 @@ export async function renderPdf(
     marginMm?: { top: number; right: number; bottom: number; left: number };
   },
 ): Promise<Buffer> {
+  // Puppeteer v23+ is ESM-only; this module compiles to CommonJS, so use a
+  // true dynamic import() instead of a top-level require.
+  const puppeteer = (await import("puppeteer")).default ?? (await import("puppeteer"));
   const browser = await puppeteer.launch({
     headless: true,
     args: [
