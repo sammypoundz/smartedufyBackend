@@ -140,7 +140,7 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const user = requireAuth(req);
-      requireTenant(req);
+      const tenantId = requireTenant(req);
       const file = (req as any).file;
       if (!file)
         return res
@@ -175,6 +175,7 @@ router.post(
         originalFileType: mime,
         originalPages: pages,
         createdBy: user.id,
+        schoolId: tenantId,
       });
       res.status(201).json(template);
     } catch (err: any) {

@@ -123,6 +123,7 @@ export const reportTemplateService = {
     originalFileType: string;
     originalPages: number;
     createdBy: string;
+    schoolId: string;
   }) {
     return prisma.reportCardTemplate.create({
       data: {
@@ -134,6 +135,7 @@ export const reportTemplateService = {
         originalFileType: input.originalFileType,
         originalPages: input.originalPages,
         createdBy: input.createdBy,
+        schoolId: input.schoolId,
         isDefault: false,
       } as any,
     });
