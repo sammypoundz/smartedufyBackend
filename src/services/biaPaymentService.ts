@@ -1,15 +1,16 @@
 // ============================================================
-// BIA token-purchase payment orchestration.
+// Paystack token-purchase payment orchestration (bank transfer).
 //  - createPendingTransaction: validates the package SERVER-SIDE, prices the
 //    purchase from the DB (never the frontend), stores PENDING, initialises
-//    the BIA hosted checkout and stores the authorizationUrl.
+//    the Paystack hosted checkout (bank_transfer channel) and stores the
+//    authorizationUrl.
 //  - getTransactionForSchool: school-scoped status reads.
-//  - reconcileTransaction: verifies with BIA and, when SUCCESS is confirmed
-//    server-side with matching amount/currency/references, credits the school's
-//    purchased-token balance via tokenWalletService.purchase (which is already
-//    idempotent on the TokenLedger unique (schoolId, reference)).
-// Tokens are NEVER credited because a user returned from BIA — only a verified
-// SUCCESS from BIA's server triggers fulfillment.
+//  - reconcileTransaction: verifies with Paystack and, when SUCCESS is
+//    confirmed server-side with matching amount/currency/references, credits
+//    the school's purchased-token balance via tokenWalletService.purchase
+//    (which is already idempotent on the TokenLedger unique (schoolId, ref)).
+// Tokens are NEVER credited because a user returned from Paystack — only a
+// verified SUCCESS from Paystack's server triggers fulfillment.
 // ============================================================
 import { z } from "zod";
 import { randomBytes } from "crypto";
@@ -20,13 +21,16 @@ import { getTokenPrice } from "./platformSettingsService";
 import {
   initializeCheckout,
   verifyPayment,
-  biaCallbackUrl,
-  biaConfigured,
-  BiaConfigError,
-  BiaApiError,
-} from "./biaService";
+  paystackCallbackUrl,
+  paystackConfigured,
+  PaystackConfigError,
+  PaystackApiError,
+} from "./paystackService";
 
 const LEDGER_REF_PREFIX = "BIAPAY-";
+// NOTE: the DB model is still named BiaPaymentTransaction (a legacy name kept
+// to avoid a destructive rename of existing MongoDB collections/fields), but
+// the actual payment gateway is now Paystack. `provider` records this.
 
 export class PaymentError extends Error {
   constructor(message: string, status = 400) {
@@ -35,9 +39,9 @@ export class PaymentError extends Error {
   }
 }
 
-/** Unique internal reference, e.g. SE-BIAPAY-20261104-AB12CD34. */
+/** Unique internal reference, e.g. SE-PAYSTACK-20261105-AB12CD34. */
 function generateReference(): string {
-  return `SE-BIAPAY-${new Date()
+  return `SE-PAYSTACK-${new Date()
     .toISOString()
     .slice(0, 10)
     .replace(/-/g, "")}-${randomBytes(5).toString("hex").toUpperCase()}`;
@@ -63,8 +67,8 @@ const initSchema = z
     path: ["packageId"],
   });
 
-/** Processing fee charged on every token purchase payment (0.9% of base). */
-export const TOKEN_FEE_RATE = 0.009;
+/** Processing fee charged on token purchase payments — REMOVED (no extra fee). */
+export const TOKEN_FEE_RATE = 0;
 
 /** Round to 2dp (kobo) without floating-point drift. */
 function round2(n: number): number {
@@ -72,9 +76,10 @@ function round2(n: number): number {
 }
 
 /**
- * Step 1-7 of the purchase flow: create the pending transaction, then ask BIA
- * for a hosted checkout session. The transaction is stored BEFORE calling BIA
- * so we always have a reconciliation record, even if initialization fails.
+ * Step 1-7 of the purchase flow: create the pending transaction, then ask
+ * Paystack for a hosted checkout session. The transaction is stored BEFORE
+ * calling Paystack so we always have a reconciliation record, even if
+ * initialization fails.
  */
 export async function startTokenCheckout(args: {
   schoolId: string;
@@ -83,9 +88,9 @@ export async function startTokenCheckout(args: {
   ip?: string;
 }) {
   const data = initSchema.parse(args.body);
-  if (!biaConfigured()) {
+  if (!paystackConfigured()) {
     throw new PaymentError(
-      "Card/bank payment is temporarily unavailable. Please use the manual bank-transfer purchase option.",
+      "Bank payment is temporarily unavailable. Please try again shortly or contact support to top up your tokens.",
       503,
     );
   }
@@ -113,9 +118,9 @@ export async function startTokenCheckout(args: {
     tokenQuantity = data.customTokens!;
   }
 
-  // 0.9% processing fee on the payment, charged on top of the base price.
-  const feeAmount = round2(baseAmount * TOKEN_FEE_RATE);
-  const amount = round2(baseAmount + feeAmount);
+  // No processing fee is charged — the school pays exactly the base price.
+  const feeAmount = 0;
+  const amount = round2(baseAmount);
 
   const school = await prisma.school.findUnique({
     where: { id: args.schoolId },
@@ -135,7 +140,7 @@ export async function startTokenCheckout(args: {
 
   const internalReference = generateReference();
 
-  // 1. Store the transaction as PENDING before hitting BIA.
+  // 1. Store the transaction as PENDING before hitting Paystack.
   const txn = await prisma.biaPaymentTransaction.create({
     data: {
       schoolId: args.schoolId,
@@ -150,6 +155,7 @@ export async function startTokenCheckout(args: {
       tokenQuantity,
       isCustom: !pkg,
       status: "PENDING",
+      provider: "PAYSTACK",
       customerEmail: user.email,
       customerName: user.name || school.name,
       customerPhone: data.customerPhone,
@@ -157,15 +163,15 @@ export async function startTokenCheckout(args: {
     },
   });
 
-  // 2. Initialize the BIA hosted checkout session.
+  // 2. Initialize the Paystack hosted checkout session (bank transfer).
   try {
     const session = await initializeCheckout({
-      amount,
+      amountNaira: amount,
       customerEmail: user.email,
       customerName: user.name || school.name,
       customerPhone: data.customerPhone,
       reference: internalReference,
-      callbackUrl: biaCallbackUrl(),
+      callbackUrl: paystackCallbackUrl(),
       description: `SmartEdufy Edufy AI Token Purchase — ${pkg ? pkg.name : "Custom"} (${tokenQuantity} tokens)`,
       metadata: {
         purpose: "EDUFY_AI_TOKEN_PURCHASE",
@@ -180,8 +186,8 @@ export async function startTokenCheckout(args: {
     const updated = await prisma.biaPaymentTransaction.update({
       where: { id: txn.id },
       data: {
-        biaReference: session.biaReference,
-        merchantReference: session.merchantReference,
+        biaReference: session.providerReference,
+        merchantReference: session.reference || session.providerReference,
         authorizationUrl: session.authorizationUrl,
         checkoutExpiresAt: session.expiresAt
           ? new Date(session.expiresAt)
@@ -219,7 +225,7 @@ export async function startTokenCheckout(args: {
         },
       })
       .catch(() => {});
-    if (e instanceof BiaConfigError || e instanceof BiaApiError) throw e;
+    if (e instanceof PaystackConfigError || e instanceof PaystackApiError) throw e;
     throw new PaymentError("Could not start payment. Please try again.", 502);
   }
 }
@@ -266,7 +272,8 @@ export interface ReconcileResult {
 }
 
 /**
- * Verify a transaction with BIA and fulfil it if BIA's servers say SUCCESS.
+ * Verify a transaction with Paystack and fulfil it if Paystack's servers say
+ * SUCCESS.
  * Safe to call from the webhook, the status endpoint, and a manual retry —
  * every path funnels through the same idempotent fulfillment.
  */
@@ -296,7 +303,7 @@ export async function reconcileTransaction(
     };
   }
 
-  const verification = await verifyPayment(txn.biaReference);
+  const verification = await verifyPayment(txn.biaReference!);
 
   // Log the attempt (bounded, no secrets).
   await prisma.biaPaymentTransaction
@@ -312,7 +319,7 @@ export async function reconcileTransaction(
     .catch(() => {});
 
   if (!verification.verified) {
-    // Temporary BIA failure → stay PENDING and reconcile later.
+    // Temporary Paystack failure → stay PENDING and reconcile later.
     return {
       reference: txn.internalReference,
       status: txn.status,
@@ -328,12 +335,12 @@ export async function reconcileTransaction(
       reference: txn.internalReference,
       status: "PENDING",
       fulfilled: false,
-      message: "Payment is still pending at BIA",
+      message: "Payment is still pending at Paystack",
     };
   }
 
   if (verification.status !== "SUCCESS") {
-    // Definitive non-success from BIA (FAILED / EXPIRED / REVERSED).
+    // Definitive non-success from Paystack (FAILED / EXPIRED / REVERSED).
     await prisma.biaPaymentTransaction.update({
       where: { id: txn.id },
       data: { status: verification.status },
@@ -353,11 +360,9 @@ export async function reconcileTransaction(
   const currencyOk =
     !verification.currency || verification.currency === txn.currency;
   const refOk =
-    !verification.biaReference ||
-    verification.biaReference === txn.biaReference;
-  const merchantOk =
-    !verification.merchantReference ||
-    verification.merchantReference === txn.internalReference;
+    !verification.providerReference ||
+    verification.providerReference === txn.biaReference;
+  const merchantOk = !verification.providerReference || verification.providerReference === txn.internalReference;
 
   if (!amountOk || !currencyOk || !refOk || !merchantOk) {
     await prisma.biaPaymentTransaction
@@ -378,7 +383,7 @@ export async function reconcileTransaction(
       .catch(() => {});
     await notifyPlatform({
       type: "PAYMENT",
-      title: "BIA payment mismatch — tokens NOT credited",
+      title: "Paystack payment mismatch — tokens NOT credited",
       message: `Transaction ${txn.internalReference} (${txn.schoolId}) reported SUCCESS but failed validation (amountOk=${amountOk}, currencyOk=${currencyOk}, refOk=${refOk}, merchantOk=${merchantOk}). Reconcile manually before crediting.`,
       schoolId: txn.schoolId,
       severity: "CRITICAL",
@@ -420,11 +425,11 @@ export async function reconcileTransaction(
       txn.tokenQuantity,
       ledgerRef,
       {
-        note: `Purchased ${txn.tokenQuantity} Edufy AI tokens through BIA CONNECT`,
+        note: `Purchased ${txn.tokenQuantity} Edufy AI tokens through Paystack bank transfer`,
         metadata: {
-          provider: "BIA",
+          provider: "PAYSTACK",
           transactionId: txn.id,
-          biaReference: txn.biaReference,
+          paystackReference: txn.biaReference,
           amountNgn: txn.amount,
           purpose: "EDUFY_AI_TOKEN_PURCHASE",
         },
@@ -468,8 +473,8 @@ export async function reconcileTransaction(
 
     await notifyPlatform({
       type: "TOKEN_PURCHASE",
-      title: "BIA token purchase credited",
-      message: `₦${txn.amount.toLocaleString()} verified via BIA — ${txn.tokenQuantity.toLocaleString()} tokens credited (ref ${txn.internalReference}).`,
+      title: "Paystack token purchase credited",
+      message: `₦${txn.amount.toLocaleString()} verified via Paystack — ${txn.tokenQuantity.toLocaleString()} tokens credited (ref ${txn.internalReference}).`,
       schoolId: txn.schoolId,
       severity: "INFO",
       metadata: { reference: txn.internalReference, tokens: txn.tokenQuantity },

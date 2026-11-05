@@ -69,7 +69,15 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use(
+  express.json({
+    // Capture the raw body for webhook HMAC verification (Paystack signs the
+    // exact bytes sent; a re-serialized JSON string would not match).
+    verify: (req: any, _res, buf) => {
+      (req as any).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -80,13 +88,14 @@ app.get('/api/health', (req, res) => {
 });
 app.use('/api/auth', authRoutes); // login, register, etc.
 
-// ---------- BIA CONNECT webhook — PUBLIC, must bypass auth/tenant ----------
-// (the webhook body is untrusted: it only triggers a server-side re-verify)
-import biaWebhookRoutes from './routes/paymentRoutes';
-// mounted at /api/v1 so the router's '/webhooks/bia' path resolves to
-// /api/v1/webhooks/bia — the same router is also mounted at /api/payments
+// ---------- Paystack webhook — PUBLIC, must bypass auth/tenant ----------
+// (the webhook body is HMAC-verified with PAYSTACK_SECRET_KEY, then only
+// triggers a server-side re-verify — it can never credit tokens directly)
+import paystackWebhookRoutes from './routes/paymentRoutes';
+// mounted at /api/v1 so the router's '/webhooks/paystack' path resolves to
+// /api/v1/webhooks/paystack — the same router is also mounted at /api/payments
 // below for the authenticated payment endpoints.
-app.use('/api/v1', biaWebhookRoutes);
+app.use('/api/v1', paystackWebhookRoutes);
 
 // ---------- Super Admin console — SEPARATE auth realm ----------
 // Mounted BEFORE the global auth/tenant middleware: platform routes use their
