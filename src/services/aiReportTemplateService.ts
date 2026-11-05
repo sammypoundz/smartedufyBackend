@@ -165,6 +165,11 @@ async function callGemini(
   let lastErr: any = null;
 
   for (const model of GEMINI_MODELS) {
+    // Transient Google-side errors (429 rate-limit, 500/503 overloaded)
+    // are retried with a short backoff before falling through to the
+    // next model.
+    const RETRYABLE = new Set([429, 500, 503]);
+    for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const resp = await fetch(
         `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
@@ -173,8 +178,19 @@ async function callGemini(
       if (!resp.ok) {
         const detail = await resp.text().catch(() => "");
         console.error(`Gemini API error (${model}):`, resp.status, detail.slice(0, 400));
-        lastErr = Object.assign(new Error(`AI request failed (status ${resp.status}).`), { status: 502 });
-        continue;
+        lastErr = Object.assign(
+          new Error(
+            resp.status === 503
+              ? "AI model is temporarily overloaded. Please retry in a moment."
+              : `AI request failed (status ${resp.status}).`,
+          ),
+          { status: resp.status === 503 ? 503 : 502 },
+        );
+        if (RETRYABLE.has(resp.status) && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          continue;
+        }
+        break; // move to the next model
       }
       const data: any = await resp.json();
       const text: string =
@@ -203,6 +219,8 @@ async function callGemini(
       return text;
     } catch (err: any) {
       lastErr = err;
+      break;
+    }
     }
   }
 
