@@ -63,11 +63,16 @@ function requireAuth(req: Request) {
   return req.user;
 }
 
-function requireTenant(): string {
+function requireTenant(req?: Request): string {
   const tenantId = getCurrentTenantId();
-  if (!tenantId)
-    throw Object.assign(new Error("Tenant context missing"), { status: 400 });
-  return tenantId;
+  if (tenantId) return tenantId;
+  // Multer's multipart stream parsing runs outside the AsyncLocalStorage
+  // tenant context, so upload handlers lose it. Fall back to the JWT's
+  // schoolId (already verified by authMiddleware/tenantMiddleware).
+  const fallback = (req as any)?.user?.schoolId;
+  if (fallback)
+    return fallback;
+  throw Object.assign(new Error("Tenant context missing"), { status: 400 });
 }
 
 function handleError(res: Response, err: any, fallback = "Request failed") {
@@ -135,7 +140,7 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const user = requireAuth(req);
-      requireTenant();
+      requireTenant(req);
       const file = (req as any).file;
       if (!file)
         return res
@@ -429,7 +434,7 @@ router.put(
   privilegeGuard("reports"),
   async (req: Request, res: Response) => {
     try {
-      requireTenant();
+      requireTenant(req);
       const data: any = {};
       if (req.body.name) data.name = String(req.body.name);
       if (req.body.description !== undefined)
@@ -454,7 +459,7 @@ router.post(
   privilegeGuard("reports"),
   async (req: Request, res: Response) => {
     try {
-      requireTenant();
+      requireTenant(req);
       const updated = await reportTemplateService.archive(
         getString(req.params.id),
       );
@@ -472,7 +477,7 @@ router.delete(
   privilegeGuard("reports"),
   async (req: Request, res: Response) => {
     try {
-      requireTenant();
+      requireTenant(req);
       await reportTemplateService.delete(getString(req.params.id));
       res.json({ success: true });
     } catch (err: any) {
