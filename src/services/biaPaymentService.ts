@@ -354,9 +354,15 @@ export async function reconcileTransaction(
   }
 
   // SUCCESS — validate amount, currency and references BEFORE crediting.
+  // Paystack's bank-transfer channel passes the bank's transfer fee on to the
+  // customer (e.g. ₦200 priced → ₦203.05 verified), so the verified amount can
+  // be slightly HIGHER than the transaction. Accept any amount >= the priced
+  // amount up to a 10% overage (fee tolerance); never allow a shortfall.
+  const FEE_TOLERANCE = 0.10;
   const amountOk =
     typeof verification.amount === "number" &&
-    Math.abs(verification.amount - txn.amount) < 0.01;
+    verification.amount >= txn.amount - 0.01 &&
+    verification.amount <= txn.amount * (1 + FEE_TOLERANCE);
   const currencyOk =
     !verification.currency || verification.currency === txn.currency;
   const refOk =

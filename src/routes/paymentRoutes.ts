@@ -127,7 +127,14 @@ router.get(
       null;
     const recentlyVerified =
       txn.updatedAt && Date.now() - new Date(txn.updatedAt).getTime() < 5_000;
-    if (txn.status === "PENDING" && txn.biaReference && !recentlyVerified) {
+    // Reconcile pending transactions AND unfulfilled REVERSED ones (a REVERSED
+    // marking can come from a transient amount-mismatch, e.g. the bank-transfer
+    // fee overage — re-verification gives it a chance to fulfil correctly).
+    const reconcilable =
+      (txn.status === "PENDING" ||
+        (txn.status === "REVERSED" && !txn.fulfilled)) &&
+      txn.biaReference;
+    if (reconcilable && !recentlyVerified) {
       reconcile = await reconcileTransaction(txn.id, "STATUS_POLL");
     }
 
