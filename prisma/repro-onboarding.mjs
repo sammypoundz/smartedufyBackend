@@ -1,8 +1,8 @@
 // Repro: login as the Newbreed admin, walk the onboarding stages and log
 // every response to see which ones fail to persist.
 const BASE = "http://localhost:5000/api";
-const EMAIL = "tobechukwudiala@gmail.com";
-const PASSWORD = process.argv[2];
+const EMAIL = process.argv[2] || "admin@school.com";
+const PASSWORD = process.argv[3] || "admin123";
 
 async function main() {
   const login = await fetch(`${BASE}/auth/login`, {
