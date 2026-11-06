@@ -36,6 +36,7 @@ import {
 import { billingService } from "../services/billingService";
 import { notifyPlatform } from "../services/platformNotificationService";
 import { logAiUsage } from "../services/aiUsageService";
+import { resolvePrivileges } from "./roles";
 
 const router = Router();
 
@@ -700,6 +701,87 @@ router.patch(
       ipAddress: req.ip,
     });
     res.json({ id: updated.id, isActive: updated.isActive });
+  }),
+);
+
+// ---- Impersonate a school admin (login-as) -------------------------------
+// Issues a REAL school JWT (same realm /api/auth/login uses) for the school's
+// primary ADMIN so the Super Admin lands straight in that school's panel.
+// Strictly SUPER_ADMIN only, always audited, and 60-minute expiry so a
+// forgotten session cannot linger.
+router.post(
+  "/schools/:id/impersonate",
+  auth,
+  requirePlatformRole("SUPER_ADMIN"),
+  asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
+    const school = await prisma.school.findUnique({
+      where: { id: String(req.params.id) },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!school) return res.status(404).json({ error: "School not found" });
+    if (!school.isActive)
+      return res.status(409).json({ error: "This school is suspended — reactivate it before logging in." });
+
+    // Prefer the school's own ADMIN; fall back to PRINCIPAL.
+    const admin =
+      (await prisma.user.findFirst({
+        where: { schoolId: school.id, role: "ADMIN", isActive: true },
+        orderBy: { createdAt: "asc" },
+      })) ||
+      (await prisma.user.findFirst({
+        where: { schoolId: school.id, role: "PRINCIPAL", isActive: true },
+        orderBy: { createdAt: "asc" },
+      }));
+    if (!admin)
+      return res.status(404).json({ error: "No active admin account exists for this school." });
+
+    const roles = Array.from(new Set([...(admin.roles || []), admin.role]));
+    const rolePrivileges = await resolvePrivileges(school.id, roles);
+    const privileges =
+      (admin.allowedPages || []).length > 0
+        ? Array.from(new Set(admin.allowedPages))
+        : rolePrivileges;
+
+    const jwt = (await import("jsonwebtoken")).default;
+    const token = jwt.sign(
+      {
+        id: admin.id,
+        role: admin.role,
+        roles,
+        privileges,
+        schoolId: school.id,
+        name: admin.name,
+        email: admin.email,
+        impersonatedBy: req.platformUser!.id, // audit trail inside the token
+      },
+      process.env.JWT_SECRET!,
+      { expiresIn: "60m" },
+    );
+
+    await logPlatformActivity({
+      actorId: req.platformUser!.id,
+      actorName: req.platformUser!.name,
+      actorRole: req.platformUser!.role,
+      action: "SCHOOL_IMPERSONATE",
+      targetType: "School",
+      targetId: school.id,
+      description: `Logged in as admin ${admin.email} of ${school.name}`,
+      ipAddress: req.ip,
+    });
+
+    res.json({
+      token,
+      user: {
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        role: admin.role,
+        roles,
+        privileges,
+        schoolId: school.id,
+      },
+      school: { id: school.id, name: school.name },
+    });
   }),
 );
 
