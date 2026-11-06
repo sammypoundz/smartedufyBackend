@@ -391,6 +391,7 @@ router.get(
           name: true,
           subdomain: true,
           isActive: true,
+          onboardingRequired: true,
           createdAt: true,
           updatedAt: true,
           _count: { select: { students: true, teachers: true, users: true } },
@@ -528,6 +529,7 @@ router.get(
         name: true,
         subdomain: true,
         isActive: true,
+        onboardingRequired: true,
         createdAt: true,
         _count: {
           select: {
@@ -554,6 +556,7 @@ router.get(
       recentUsers,
       classes,
       academicYears,
+      onboarding,
     ] = await Promise.all([
       prisma.subscription.findUnique({
         where: { schoolId: school.id },
@@ -608,6 +611,10 @@ router.get(
         where: { schoolId: school.id, isActive: true },
         select: { name: true },
       }),
+      prisma.schoolOnboardingProgress.findUnique({
+        where: { schoolId: school.id },
+        select: { completedStages: true, currentStage: true, completedAt: true },
+      }),
     ]);
 
     const tokenPrice = await getTokenPrice();
@@ -636,6 +643,14 @@ router.get(
       staff: school._count.users,
       subscription,
       wallet,
+      onboarding: onboarding
+        ? {
+            completedStages: onboarding.completedStages,
+            currentStage: onboarding.currentStage,
+            completedAt: onboarding.completedAt,
+            done: onboarding.completedStages.length >= 8,
+          }
+        : null,
       subscriptionPayments: subsPayments,
       tokenPurchases,
       tokenCharges,
@@ -685,6 +700,49 @@ router.patch(
       ipAddress: req.ip,
     });
     res.json({ id: updated.id, isActive: updated.isActive });
+  }),
+);
+
+// Toggle the self-onboarding wizard requirement for a school. When on, the
+// school's admin sees the onboarding wizard on every page load until all 8
+// stages are complete. ONBOARDING_OFFICER can also toggle it.
+router.patch(
+  "/schools/:id/onboarding-required",
+  auth,
+  requirePlatformRole("SUPER_ADMIN", "ONBOARDING_OFFICER"),
+  asyncRoute(async (req: PlatformAuthRequest, res: Response) => {
+    const schema = z.object({ required: z.boolean() });
+    const { required } = schema.parse(req.body);
+    const school = await prisma.school.findUnique({
+      where: { id: String(req.params.id) },
+    });
+    if (!school) return res.status(404).json({ error: "School not found" });
+    const updated = await prisma.school.update({
+      where: { id: school.id },
+      data: { onboardingRequired: required },
+    });
+    // When requiring onboarding, make sure a progress row exists so the
+    // wizard opens on stage 1 rather than erroring.
+    if (required) {
+      const p = await prisma.schoolOnboardingProgress.findUnique({
+        where: { schoolId: school.id },
+      });
+      if (!p)
+        await prisma.schoolOnboardingProgress.create({ data: { schoolId: school.id } });
+    }
+    await logPlatformActivity({
+      actorId: req.platformUser!.id,
+      actorName: req.platformUser!.name,
+      actorRole: req.platformUser!.role,
+      action: required ? "ONBOARDING_REQUIRED" : "ONBOARDING_CLEARED",
+      targetType: "School",
+      targetId: school.id,
+      description: required
+        ? `Assigned the onboarding wizard to ${school.name}`
+        : `Removed the onboarding wizard from ${school.name}`,
+      ipAddress: req.ip,
+    });
+    res.json({ id: updated.id, onboardingRequired: updated.onboardingRequired });
   }),
 );
 

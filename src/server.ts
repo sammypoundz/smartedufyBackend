@@ -41,6 +41,7 @@ import platformRoutes from './routes/platformRoutes';
 import platformOnboardingRoutes from './routes/platformOnboardingRoutes';
 import tokenRoutes from './routes/tokenRoutes';
 import reportTemplateRoutes from './routes/reportTemplateRoutes';
+import schoolOnboardingRoutes from './routes/schoolOnboardingRoutes';
 import { billingService } from './services/billingService';
 
 
@@ -152,6 +153,9 @@ import parentLinkRoutes from './routes/parentLinkRoutes';
 app.use('/api/timetable-workflow', timetableWorkflowRoutes);
 app.use('/api/parent-links', parentLinkRoutes);
 app.use('/api', reportTemplateRoutes); // /api/report-templates + /api/report-cards
+
+// School SELF-ONBOARDING wizard — the school's admin sets up their own school
+app.use('/api/onboarding', schoolOnboardingRoutes);
 
 // Error handler
 app.use(errorHandler);

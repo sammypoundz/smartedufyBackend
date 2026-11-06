@@ -14,6 +14,9 @@ model School {
   subdomain String?  @unique
   logoUrl   String?
   isActive  Boolean  @default(true)
+  // When true, the school's admin is funnelled into the self-onboarding
+  // wizard on every page load until they finish all 8 stages.
+  onboardingRequired Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -62,6 +65,7 @@ model School {
 
   auditLogs    AuditLog[]
   questionDocs QuestionDoc[]
+  onboardingProgress SchoolOnboardingProgress[]
 
   // NEW: Settings models
   promotionRules      PromotionRule[]
@@ -1091,6 +1095,28 @@ model PlatformAuditLog {
   @@index([createdAt])
   @@index([actorId])
   @@map("platform_audit_logs")
+}
+
+// ---- School onboarding progress tracker (Super Admin console) ----
+// One row per school, created lazily. Tracks completion of the 8 guided
+// onboarding stages so the Super Admin (and the school's admin) can see and
+// resume exactly where onboarding left off.
+model SchoolOnboardingProgress {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId      String   @unique @db.ObjectId
+  school        School   @relation(fields: [schoolId], references: [id])
+  // Completed stage keys: PROFILE | ACADEMIC | CLASSES | SUBJECTS | STAFF
+  // | STUDENTS | FEES | FINISH
+  completedStages String[] @default([])
+  stageData     Json?    // free-form answers saved per stage (resumable drafts)
+  currentStage  String   @default("PROFILE")
+  startedAt     DateTime @default(now())
+  completedAt   DateTime?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@index([updatedAt])
+  @@map("school_onboarding_progress")
 }
 
 // ---- Subscription plans (platform-level, no schoolId) ----
