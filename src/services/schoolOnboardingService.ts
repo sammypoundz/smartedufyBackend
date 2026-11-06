@@ -62,9 +62,8 @@ export async function completeStage(
   stageData?: Record<string, unknown>,
 ) {
   const progress = await getOrCreateProgress(schoolId);
-  if (!isStageUnlocked(progress.currentStage as OnboardingStage, stage)) {
-    throw new StageOrderError(progress.currentStage as OnboardingStage, stage);
-  }
+  // Stages can be completed in ANY order — the wizard tabs are freely
+  // navigable, and each stage validates its own data before submitting.
   // PROFILE: persist the school name the admin typed so report cards,
   // receipts and the parent portal show it immediately.
   if (

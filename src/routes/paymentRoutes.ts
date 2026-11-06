@@ -10,11 +10,13 @@ import { prisma } from "../config/prisma";
 import { authMiddleware } from "../middleware/auth";
 import {
   startTokenCheckout,
+  startInvoiceCheckout,
   getTransactionForSchool,
   reconcileTransaction,
   schoolPaymentHistory,
   PaymentError,
 } from "../services/biaPaymentService";
+import z from "zod";
 import { paystackConfigured } from "../services/paystackService";
 import { TOKEN_FEE_RATE } from "../services/biaPaymentService";
 import { getTokenPrice } from "../services/platformSettingsService";
@@ -71,6 +73,37 @@ router.post(
       amount: result.checkout.amount,
       currency: result.checkout.currency,
       tokenQuantity: result.checkout.tokenQuantity,
+      expiresAt: result.checkout.expiresAt,
+    });
+  }),
+);
+
+// ---------- POST /api/payments/invoice/initialize ----------
+// Start a Paystack bank-transfer checkout to pay one of the school's own
+// subscription invoices. The amount comes from the Invoice row itself.
+router.post(
+  "/invoice/initialize",
+  asyncRoute(async (req: any, res: Response) => {
+    if (!req.user?.id || !req.user?.schoolId)
+      return res.status(401).json({ error: "Unauthorized" });
+    if (!rateLimitInit(req.user.id)) {
+      return res
+        .status(429)
+        .json({ error: "Too many payment attempts — wait a minute and retry" });
+    }
+    const schema = z.object({ invoiceId: z.string().min(1).max(100) });
+    const { invoiceId } = schema.parse(req.body);
+    const result = await startInvoiceCheckout({
+      invoiceId,
+      schoolId: req.user.schoolId,
+      userId: req.user.id,
+      ip: req.ip,
+    });
+    res.status(201).json({
+      reference: result.checkout.reference,
+      authorizationUrl: result.checkout.authorizationUrl,
+      amount: result.checkout.amount,
+      currency: result.checkout.currency,
       expiresAt: result.checkout.expiresAt,
     });
   }),

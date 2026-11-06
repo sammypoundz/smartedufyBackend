@@ -1119,7 +1119,20 @@ router.post(
       },
       ipAddress: req.ip,
     });
-    res.status(201).json(sub);
+
+    // Generate the FIRST invoice right away so the school immediately shows
+    // up in the Invoices table with the per-school price that was just set —
+    // otherwise it would only appear after a payment lands or a cron run.
+    // (FREE plans never get invoices; generateInvoiceForSchool is idempotent
+    // on (schoolId, periodKey), so re-running the cron won't duplicate it.)
+    let firstInvoice = null;
+    if (plan.type !== "FREE") {
+      firstInvoice = await billingService
+        .generateInvoiceForSchool(school.id, "MANUAL", req.platformUser!.id)
+        .catch(() => null);
+    }
+
+    res.status(201).json({ ...sub, invoice: firstInvoice });
   }),
 );
 

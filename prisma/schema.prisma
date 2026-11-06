@@ -1558,12 +1558,14 @@ model BiaPaymentTransaction {
   lastFulfillError  String?
 
   verificationLog   Json? // history of verify/webhook attempts (no secrets)
+  invoiceId         String?   @db.ObjectId // subscription invoice this payment settles
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
   school  School       @relation(fields: [schoolId], references: [id])
   user    User         @relation(fields: [userId], references: [id])
   package TokenPackage? @relation(fields: [packageId], references: [id])
+  invoice Invoice?     @relation(fields: [invoiceId], references: [id])
 
   @@index([schoolId, status])
   @@index([createdAt])
@@ -1592,6 +1594,7 @@ model Invoice {
   paidAt           DateTime?
   paymentRef       String? // SubscriptionPayment/PackagePurchase linkage
   paidAmount       Float     @default(0)
+  paystackPayments BiaPaymentTransaction[]
   createdBy        String?   @db.ObjectId // platform user (manual generation)
   source           String    @default("AUTO") // AUTO (cron) | MANUAL (super admin)
   createdAt        DateTime  @default(now())

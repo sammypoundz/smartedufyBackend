@@ -477,6 +477,11 @@ export async function reconcileTransaction(
       },
     });
 
+    // Invoice payment: settle the subscription invoice (extend + tokens).
+    if (txn.invoiceId) {
+      await fulfilInvoicePayment(txn.id).catch(() => {});
+    }
+
     await notifyPlatform({
       type: "TOKEN_PURCHASE",
       title: "Paystack token purchase credited",
@@ -535,5 +540,183 @@ export async function schoolPaymentHistory(schoolId: string, limit = 50) {
       fulfilled: true,
       fulfilledAt: true,
     } as any,
+  });
+}
+// ============================================================
+// Invoice payment via Paystack bank transfer.
+// The school pays a PENDING Invoice from the platform billing
+// system (billingService.generateInvoiceForSchool) through the
+// same hosted bank-transfer checkout used for token purchases.
+// On SUCCESS the invoice is settled through billingService.payInvoice
+// (subscription extended, tokens credited) exactly once.
+// ============================================================
+
+import { billingService } from "./billingService";
+
+/**
+ * Start a hosted-checkout (bank transfer) payment for a pending invoice.
+ * Amount, currency and description come from the Invoice row itself —
+ * never from the request.
+ */
+export async function startInvoiceCheckout(args: {
+  invoiceId: string;
+  schoolId: string;
+  userId: string;
+  ip?: string;
+}) {
+  if (!paystackConfigured()) {
+    throw new PaymentError(
+      "Bank payment is temporarily unavailable. Please try again shortly or contact support.",
+      503,
+    );
+  }
+
+  const invoice = await prisma.invoice.findFirst({
+    where: { id: args.invoiceId, schoolId: args.schoolId }, // tenant isolation
+  });
+  if (!invoice) throw new PaymentError("Invoice not found", 404);
+  if (invoice.status === "PAID")
+    throw new PaymentError("This invoice has already been paid", 409);
+  if (invoice.status === "VOID")
+    throw new PaymentError("This invoice is void — contact support", 409);
+
+  const existing = await prisma.biaPaymentTransaction.findFirst({
+    where: { invoiceId: invoice.id, status: { in: ["PENDING"] } },
+    orderBy: { createdAt: "desc" },
+  });
+  // A live checkout already exists — reuse it so the school isn't billed twice.
+  if (existing && existing.authorizationUrl) {
+    if (existing.checkoutExpiresAt && existing.checkoutExpiresAt > new Date()) {
+      return {
+        transaction: existing,
+        checkout: {
+          reference: existing.internalReference,
+          authorizationUrl: existing.authorizationUrl,
+          amount: existing.amount,
+          currency: existing.currency,
+          tokenQuantity: 0,
+          expiresAt: existing.checkoutExpiresAt.toISOString(),
+        },
+      };
+    }
+  }
+
+  const school = await prisma.school.findUnique({
+    where: { id: args.schoolId },
+    select: { name: true, isActive: true },
+  });
+  if (!school) throw new PaymentError("School not found", 404);
+  if (!school.isActive) throw new PaymentError("School account is inactive", 403);
+
+  const user = await prisma.user.findUnique({
+    where: { id: args.userId },
+    select: { name: true, email: true, isActive: true },
+  });
+  if (!user || !user.isActive) throw new PaymentError("User not found", 404);
+  if (!user.email)
+    throw new PaymentError("Your account has no email for checkout", 400);
+
+  const amount = round2(invoice.amount);
+  const internalReference = generateReference();
+
+  const txn = await prisma.biaPaymentTransaction.create({
+    data: {
+      schoolId: args.schoolId,
+      userId: args.userId,
+      invoiceId: invoice.id,
+      internalReference,
+      baseAmount: amount,
+      feeAmount: 0,
+      feeRate: TOKEN_FEE_RATE,
+      amount,
+      currency: invoice.currency || "NGN",
+      tokenQuantity: 0,
+      isCustom: true,
+      purpose: "SUBSCRIPTION_INVOICE_PAYMENT",
+      status: "PENDING",
+      provider: "PAYSTACK",
+      customerEmail: user.email,
+      customerName: user.name || school.name,
+      verificationLog: { init: { at: new Date().toISOString() } },
+    } as any,
+  });
+
+  try {
+    const session = await initializeCheckout({
+      amountNaira: amount,
+      customerEmail: user.email,
+      customerName: user.name || school.name,
+      reference: internalReference,
+      callbackUrl: paystackCallbackUrl(),
+      description: `SmartEdufy Subscription — Invoice ${invoice.invoiceNo}`,
+      metadata: {
+        purpose: "SUBSCRIPTION_INVOICE_PAYMENT",
+        schoolId: args.schoolId,
+        invoiceId: invoice.id,
+        invoiceNo: invoice.invoiceNo,
+      } as any,
+      expiresInMinutes: 60,
+    });
+
+    const updated = await prisma.biaPaymentTransaction.update({
+      where: { id: txn.id },
+      data: {
+        biaReference: session.providerReference,
+        merchantReference: session.reference || session.providerReference,
+        authorizationUrl: session.authorizationUrl,
+        checkoutExpiresAt: session.expiresAt
+          ? new Date(session.expiresAt)
+          : null,
+        verificationLog: {
+          init: { at: new Date().toISOString(), ok: true },
+        },
+      },
+    });
+
+    return {
+      transaction: updated,
+      checkout: {
+        reference: updated.internalReference,
+        authorizationUrl: session.authorizationUrl,
+        amount: updated.amount,
+        currency: updated.currency,
+        tokenQuantity: 0,
+        expiresAt: session.expiresAt || null,
+      },
+    };
+  } catch (e: any) {
+    await prisma.biaPaymentTransaction
+      .update({
+        where: { id: txn.id },
+        data: {
+          verificationLog: {
+            init: {
+              at: new Date().toISOString(),
+              ok: false,
+              error: String(e?.message || e).slice(0, 500),
+            },
+          },
+        },
+      })
+      .catch(() => {});
+    if (e instanceof PaystackConfigError || e instanceof PaystackApiError) throw e;
+    throw new PaymentError("Could not start payment. Please try again.", 502);
+  }
+}
+
+/**
+ * Fulfil an invoice payment: settle the invoice through billingService.payInvoice
+ * (extends subscription, credits subscription tokens, writes billing events)
+ * exactly once — guarded by the transaction's fulfilled flag.
+ */
+async function fulfilInvoicePayment(txnId: string) {
+  const txn = await prisma.biaPaymentTransaction.findUnique({
+    where: { id: txnId },
+  });
+  if (!txn || !txn.invoiceId || txn.fulfilled) return;
+  await billingService.payInvoice(txn.invoiceId, txn.internalReference, "TRANSFER");
+  await prisma.biaPaymentTransaction.update({
+    where: { id: txn.id },
+    data: { fulfilled: true, fulfilledAt: txn.fulfilledAt || new Date() },
   });
 }
