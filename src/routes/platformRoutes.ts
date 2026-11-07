@@ -2233,6 +2233,358 @@ router.get(
 );
 
 // ============================================================
+// MODULE 16 — TRAFFIC & ACTIVITY MONITOR
+// Per-school traffic intelligence assembled entirely from data the platform
+// already records (audit logs, e-Pin result-checker redemptions, population
+// counts, Cloudinary storage) — no extra instrumentation required.
+// ============================================================
+router.get(
+  "/traffic",
+  auth,
+  requirePlatformRole("SUPER_ADMIN", "ANALYTICS_VIEWER", "SUPPORT_OFFICER"),
+  asyncRoute(async (req, res) => {
+    const windowDays = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+    const since = daysAgo(windowDays);
+
+    const schools = await prisma.school.findMany({
+      select: { id: true, name: true, isActive: true, createdAt: true },
+      orderBy: { name: "asc" },
+    });
+    const schoolIds = schools.map((s) => s.id);
+
+    const [
+      schoolUsers,
+      activeSince,
+      byRoleGroups,
+      audit30,
+      failedLogins,
+      epinChecks,
+      topPins,
+      hourlyChecks,
+      resultCounts,
+      authActions,
+    ] = await Promise.all([
+      // Population per school, split by role — activity KPIs need the base
+      prisma.user.groupBy({
+        by: ["schoolId", "role"],
+        where: { schoolId: { in: schoolIds }, isActive: true },
+        _count: { id: true },
+      }),
+      // Who did ANYTHING in the window (distinct users in audit log)
+      prisma.auditLog.findMany({
+        where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+        select: { schoolId: true, userId: true },
+        distinct: ["schoolId", "userId"],
+      }),
+      // Activity per role in the window (who is actually using the system)
+      prisma.auditLog.groupBy({
+        by: ["schoolId", "userRole"],
+        where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+        _count: { id: true },
+      }),
+      // Daily action volume per school (traffic trend chart)
+      prisma.auditLog.groupBy({
+        by: ["schoolId"],
+        where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+        _count: { id: true },
+      }),
+      // Failed logins in the window — a security/traffic signal
+      prisma.auditLog.count({
+        where: {
+          schoolId: { in: schoolIds },
+          action: "LOGIN",
+          createdAt: { gte: since },
+          description: { not: { in: ["Logged in"] } },
+        },
+      }),
+      // Public result-checker page traffic (e-Pin redemptions)
+      prisma.resultEpin.groupBy({
+        by: ["schoolId"],
+        where: { schoolId: { in: schoolIds }, usedAt: { gte: since } },
+        _count: { id: true },
+        _sum: { uses: true },
+      }),
+      // Most frequently checked results platform-wide
+      prisma.resultEpin.findMany({
+        where: { schoolId: { in: schoolIds }, uses: { gt: 0 } },
+        orderBy: { uses: "desc" },
+        take: 10,
+        include: {
+          student: { select: { name: true, admissionNumber: true } },
+        },
+      }),
+      // Hour-of-day distribution of result checks (peak visiting hours)
+      prisma.resultEpin.findMany({
+        where: { schoolId: { in: schoolIds }, usedAt: { gte: since } },
+        select: { usedAt: true, uses: true },
+        take: 2000,
+        orderBy: { usedAt: "desc" },
+      }),
+      // School size signals: records created per school
+      Promise.all([
+        prisma.student.groupBy({
+          by: ["schoolId"],
+          where: { schoolId: { in: schoolIds } },
+          _count: { id: true },
+        }),
+        prisma.result.groupBy({
+          by: ["schoolId"],
+          where: { schoolId: { in: schoolIds } },
+          _count: { id: true },
+        }),
+      ]),
+      // Logins vs other actions in the window (auth traffic split)
+      prisma.auditLog.groupBy({
+        by: ["action"],
+        where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+        _count: { id: true },
+      }),
+    ]);
+
+    // ---- index the grouped data ----
+    const popBySchool = new Map<
+      string,
+      { students: number; staff: number; parents: number; total: number }
+    >();
+    for (const g of schoolUsers) {
+      const cur =
+        popBySchool.get(g.schoolId) ||
+        { students: 0, staff: 0, parents: 0, total: 0 };
+      const n = g._count.id;
+      if (g.role === "STUDENT") cur.students += n;
+      else if (g.role === "PARENT") cur.parents += n;
+      else cur.staff += n; // ADMIN, TEACHER, PRINCIPAL, BURSAR, ...
+      cur.total += n;
+      popBySchool.set(g.schoolId, cur);
+    }
+
+    const activeUsersBySchool = new Map<string, Set<string>>();
+    for (const row of activeSince) {
+      if (!row.userId) continue;
+      const set = activeUsersBySchool.get(row.schoolId) || new Set();
+      set.add(row.userId);
+      activeUsersBySchool.set(row.schoolId, set);
+    }
+
+    const roleActivity = new Map<
+      string,
+      Map<string, number>
+    >();
+    for (const g of byRoleGroups) {
+      const m = roleActivity.get(g.schoolId) || new Map();
+      m.set(g.userRole || "UNKNOWN", g._count.id);
+      roleActivity.set(g.schoolId, m);
+    }
+
+    const actionsBySchool = new Map(
+      audit30.map((g) => [g.schoolId, g._count.id]),
+    );
+    const checksBySchool = new Map(
+      epinChecks.map((g) => [
+        g.schoolId,
+        { visitors: g._count.id, checks: g._sum.uses || 0 },
+      ]),
+    );
+    const studentsBySchool = new Map(
+      resultCounts[0].map((g) => [g.schoolId, g._count.id]),
+    );
+    const resultsBySchool = new Map(
+      resultCounts[1].map((g) => [g.schoolId, g._count.id]),
+    );
+    const totalActions = authActions.reduce((s, a) => s + a._count.id, 0);
+    const loginActions =
+      authActions.find((a) => a.action === "LOGIN")?._count.id || 0;
+
+    // Hour-of-day histogram for result-checker visits
+    const hourHistogram = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      visits: 0,
+    }));
+    for (const p of hourlyChecks) {
+      if (!p.usedAt) continue;
+      hourHistogram[p.usedAt.getHours()].visits += p.uses;
+    }
+
+    const rows = schools.map((s) => {
+      const pop = popBySchool.get(s.id) ||
+        { students: 0, staff: 0, parents: 0, total: 0 };
+      const active = activeUsersBySchool.get(s.id)?.size || 0;
+      const actions = actionsBySchool.get(s.id) || 0;
+      const checks = checksBySchool.get(s.id) || { visitors: 0, checks: 0 };
+      const roles = roleActivity.get(s.id) || new Map();
+      const roleMap: Record<string, number> = {};
+      for (const [k, v] of roles) roleMap[k] = v;
+      return {
+        id: s.id,
+        name: s.name,
+        isActive: s.isActive,
+        ageDays: Math.floor(
+          (Date.now() - s.createdAt.getTime()) / (24 * 60 * 60 * 1000),
+        ),
+        population: pop,
+        activeUsers: active,
+        activityRate:
+          pop.total > 0
+            ? Math.round((active / pop.total) * 100)
+            : 0,
+        actions,
+        actionsPerUser: active > 0 ? Math.round(actions / active) : 0,
+        resultChecker: {
+          visitors: checks.visitors,
+          checks: checks.checks,
+          visitorsPerStudent:
+            pop.students > 0
+              ? Math.round((checks.visitors / pop.students) * 100)
+              : 0,
+        },
+        activityByRole: roleMap,
+        size: {
+          students: studentsBySchool.get(s.id) || 0,
+          results: resultsBySchool.get(s.id) || 0,
+        },
+      };
+    });
+
+    // Platform-wide roll-up
+    const totals = rows.reduce(
+      (a, r) => ({
+        users: a.users + r.population.total,
+        activeUsers: a.activeUsers + r.activeUsers,
+        actions: a.actions + r.actions,
+        resultChecks: a.resultChecks + r.resultChecker.checks,
+        resultVisitors: a.resultVisitors + r.resultChecker.visitors,
+      }),
+      {
+        users: 0,
+        activeUsers: 0,
+        actions: 0,
+        resultChecks: 0,
+        resultVisitors: 0,
+      },
+    );
+
+    await logPlatformActivity({
+      actorId: (req as PlatformAuthRequest).platformUser!.id,
+      actorName: (req as PlatformAuthRequest).platformUser!.name,
+      actorRole: (req as PlatformAuthRequest).platformUser!.role,
+      action: "TRAFFIC_VIEW",
+      description: `Viewed traffic & activity monitor (${windowDays}-day window)`,
+      ipAddress: req.ip,
+    });
+
+    res.json({
+      windowDays,
+      totals: {
+        ...totals,
+        activityRate:
+          totals.users > 0
+            ? Math.round((totals.activeUsers / totals.users) * 100)
+            : 0,
+        loginShare:
+          totalActions > 0
+            ? Math.round((loginActions / totalActions) * 100)
+            : 0,
+      },
+      activityByAction: authActions
+        .map((a) => ({ action: a.action, count: a._count.id }))
+        .sort((a, b) => b.count - a.count),
+      resultCheckerHours: hourHistogram,
+      topCheckedResults: topPins.map((p) => ({
+        schoolId: p.schoolId,
+        studentName: p.student.name,
+        admissionNumber: p.student.admissionNumber,
+        term: p.term,
+        uses: p.uses,
+        lastUsedAt: p.usedAt,
+      })),
+      schools: rows.sort((a, b) => b.actions - a.actions),
+    });
+  }),
+);
+
+// ============================================================
+// MODULE 16b — STORAGE & FOOTPRINT
+// Cloudinary usage per school (files + bytes) for the platform's own
+// storage dashboard. Cloudinary is the durable store, so this reflects
+// each school's real file footprint.
+// ============================================================
+router.get(
+  "/storage",
+  auth,
+  requirePlatformRole("SUPER_ADMIN", "ANALYTICS_VIEWER"),
+  asyncRoute(async (req, res) => {
+    const cloud = (await import("../config/cloudinary")).default;
+    const FOLDER = "smartedufy";
+
+    // Cloudinary subfolders are per-school: smartedufy/<schoolId>/...
+    const subfolders = await cloud.api.sub_folders(FOLDER, { max_results: 500 });
+    const folderNames: string[] = (subfolders.folders || []).map(
+      (f: any) => f.name,
+    );
+
+    // Fallback when no per-school folders exist yet: treat everything under
+    // the root as platform storage.
+    const schools = await prisma.school.findMany({
+      select: { id: true, name: true },
+    });
+    const nameMap = new Map(schools.map((s) => [s.id, s.name]));
+
+    const perSchool: {
+      schoolId: string;
+      schoolName: string;
+      files: number;
+      bytes: number;
+    }[] = [];
+    let platformFiles = 0;
+    let platformBytes = 0;
+
+    for (const fname of folderNames) {
+      const schoolId = fname.split("/").pop() as string;
+      let resources: any = { resources: [], next_cursor: undefined };
+      let files = 0;
+      let bytes = 0;
+      do {
+        resources = await cloud.api.resources_by_asset_folder(fname, {
+          max_results: 500,
+          next_cursor: resources.next_cursor,
+        });
+        for (const r of resources.resources || []) {
+          files++;
+          bytes += r.bytes || 0;
+        }
+      } while (resources.next_cursor);
+      const known = nameMap.has(schoolId);
+      if (known) {
+        perSchool.push({ schoolId, schoolName: nameMap.get(schoolId)!, files, bytes });
+      } else {
+        platformFiles += files;
+        platformBytes += bytes;
+      }
+    }
+
+    perSchool.sort((a, b) => b.bytes - a.bytes);
+    const totalBytes =
+      perSchool.reduce((s, r) => s + r.bytes, 0) + platformBytes;
+
+    await logPlatformActivity({
+      actorId: (req as PlatformAuthRequest).platformUser!.id,
+      actorName: (req as PlatformAuthRequest).platformUser!.name,
+      actorRole: (req as PlatformAuthRequest).platformUser!.role,
+      action: "STORAGE_VIEW",
+      description: "Viewed storage & footprint monitor",
+    });
+
+    res.json({
+      totalFiles: perSchool.reduce((s, r) => s + r.files, 0) + platformFiles,
+      totalBytes,
+      platformFiles,
+      platformBytes,
+      perSchool,
+    });
+  }),
+);
+
+// ============================================================
 // MODULE 11 — SYSTEM HEALTH
 // ============================================================
 router.get(
