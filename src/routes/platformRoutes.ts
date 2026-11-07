@@ -2530,7 +2530,12 @@ router.get(
     try {
       const subfolders = await cloud.api.sub_folders(FOLDER, { max_results: 500 });
       folderNames = (subfolders.folders || []).map((f: any) => f.name);
-    } catch {
+    } catch (e: any) {
+      console.error(
+        "Cloudinary sub_folders scan failed:",
+        e?.http_code || "",
+        e?.message || e,
+      );
       folderNames = []; // not configured / network error — degrade gracefully
     }
 
