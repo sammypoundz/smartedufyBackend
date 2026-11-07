@@ -60,6 +60,7 @@ model School {
   academicYears             AcademicYear[]
   biaTransactions           BiaPaymentTransaction[]
   terms                     Term[]
+  resultEpins               ResultEpin[]
   promotionHistories        StudentPromotionHistory[]
   inventoryItems            InventoryItem[]
 
@@ -144,6 +145,7 @@ model Student {
   testAttempts     TestAttempt[]
   feePayments      FeePayment[]
   assignedFees     StudentFee[]
+  resultEpins      ResultEpin[]
   linkRequests     ParentStudentLink[]
   generatedReportCards GeneratedReportCard[]
 }
@@ -1570,6 +1572,39 @@ model BiaPaymentTransaction {
   @@index([schoolId, status])
   @@index([createdAt])
   @@map("bia_payment_transactions")
+}
+
+// ========== RESULT CHECK E-PINS ==========
+// Per-term result checker e-Pins. Every term new unique e-Pins are generated
+// per student; a student (or parent) redeems the serial + PIN combination on
+// the public check endpoint to view their results for that term. The unique
+// (schoolId, serial) and (schoolId, pin) constraints guarantee global
+// uniqueness within a school; generation is idempotent per
+// student/year/term — re-running regenerate only fills missing rows.
+model ResultEpin {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String   @db.ObjectId
+  school         School   @relation(fields: [schoolId], references: [id])
+  studentId      String   @db.ObjectId
+  student        Student  @relation(fields: [studentId], references: [id])
+  academicYearId String   @db.ObjectId
+  term           String // "First Term" | "Second Term" | "Third Term"
+
+  serial  String // printed/visible identifier e.g. EP-XXXX
+  pin     String // secret PIN e.g. 8 uppercase alphanumeric
+  uses    Int      @default(0) // number of times the pin has been redeemed
+  maxUses Int      @default(5) // soft usage cap; exceeded pins are rejected
+  usedAt  DateTime?
+  expiresAt DateTime? // optional expiry after the term window
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([schoolId, serial])
+  @@unique([schoolId, pin])
+  @@unique([studentId, academicYearId, term]) // one e-pin per student per term
+  @@index([schoolId, academicYearId, term])
+  @@map("result_epins")
 }
 
 // ---- Invoice for a subscription cycle (PPS snapshot or fixed tier) ----

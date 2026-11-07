@@ -89,6 +89,11 @@ app.get('/api/health', (req, res) => {
 });
 app.use('/api/auth', authRoutes); // login, register, etc.
 
+// Result checker e-Pins — /check is public (no auth); admin routes carry
+// their own authMiddleware inside the router.
+import epinRoutes from './routes/epinRoutes';
+app.use('/api/epins', epinRoutes);
+
 // ---------- Paystack webhook — PUBLIC, must bypass auth/tenant ----------
 // (the webhook body is HMAC-verified with PAYSTACK_SECRET_KEY, then only
 // triggers a server-side re-verify — it can never credit tokens directly)
