@@ -2524,10 +2524,15 @@ router.get(
     }
 
     // Cloudinary subfolders are per-school: smartedufy/<schoolId>/...
-    const subfolders = await cloud.api.sub_folders(FOLDER, { max_results: 500 });
-    const folderNames: string[] = (subfolders.folders || []).map(
-      (f: any) => f.name,
-    );
+    // Wrapped so a missing/unreachable Cloudinary config degrades to empty
+    // per-school file counts instead of a 500 (API bandwidth still returns).
+    let folderNames: string[] = [];
+    try {
+      const subfolders = await cloud.api.sub_folders(FOLDER, { max_results: 500 });
+      folderNames = (subfolders.folders || []).map((f: any) => f.name);
+    } catch {
+      folderNames = []; // not configured / network error — degrade gracefully
+    }
 
     const schools = await prisma.school.findMany({
       select: { id: true, name: true },
