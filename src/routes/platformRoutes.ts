@@ -2513,6 +2513,7 @@ router.get(
   auth,
   requirePlatformRole("SUPER_ADMIN", "ANALYTICS_VIEWER"),
   asyncRoute(async (req, res) => {
+    try {
     const cloud = (await import("../config/cloudinary")).default;
     const FOLDER = "smartedufy";
 
@@ -2663,6 +2664,24 @@ router.get(
         }))
         .sort((a, b) => a.date.localeCompare(b.date)),
     });
+    } catch (e: any) {
+      // Surface the real cause: some errors carry no .message, so log and
+      // return everything we can inspect (message, name, stack, raw value).
+      const detail =
+        e?.message ||
+        e?.name ||
+        (typeof e === "string" ? e : "") ||
+        (() => {
+          try { return JSON.stringify(e); } catch { return String(e); }
+        })();
+      console.error(
+        "[storage] handler failed:",
+        detail,
+        "\nstack:",
+        e?.stack || "(none)",
+      );
+      res.status(500).json({ error: "Internal server error", detail });
+    }
   }),
 );
 
