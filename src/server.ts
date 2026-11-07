@@ -50,6 +50,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { authMiddleware } from './middleware/auth';
 import { tenantMiddleware } from './middleware/tenant';
 import { auditMiddleware } from './middleware/audit';
+import { bandwidthMiddleware } from './middleware/bandwidth';
 import prisma from './config/db';
 
 dotenv.config();
@@ -115,6 +116,7 @@ app.use('/api/platform/onboarding', platformOnboardingRoutes);
 app.use(authMiddleware);      // sets req.user
 app.use(tenantMiddleware);    // sets tenant context & validates user belongs to tenant
 app.use(auditMiddleware);     // logs every mutating request
+app.use(bandwidthMiddleware); // counts per-school response bytes (bandwidth)
 
 // ---------- Protected routes (require authentication & tenant) ----------
 

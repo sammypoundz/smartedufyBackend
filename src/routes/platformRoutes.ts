@@ -2503,10 +2503,10 @@ router.get(
 );
 
 // ============================================================
-// MODULE 16b — STORAGE & FOOTPRINT
-// Cloudinary usage per school (files + bytes) for the platform's own
-// storage dashboard. Cloudinary is the durable store, so this reflects
-// each school's real file footprint.
+// MODULE 16b — STORAGE, DISK & BANDWIDTH
+// Per-school file footprint (Cloudinary assets per school subfolder) plus
+// account-level server disk & delivery bandwidth from Cloudinary's usage
+// API, and real per-school API bandwidth from the BandwidthStat counters.
 // ============================================================
 router.get(
   "/storage",
@@ -2516,14 +2516,19 @@ router.get(
     const cloud = (await import("../config/cloudinary")).default;
     const FOLDER = "smartedufy";
 
+    const since = daysAgo(30);
+    const dateKeys: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      const d = daysAgo(i);
+      dateKeys.push(d.toISOString().slice(0, 10));
+    }
+
     // Cloudinary subfolders are per-school: smartedufy/<schoolId>/...
     const subfolders = await cloud.api.sub_folders(FOLDER, { max_results: 500 });
     const folderNames: string[] = (subfolders.folders || []).map(
       (f: any) => f.name,
     );
 
-    // Fallback when no per-school folders exist yet: treat everything under
-    // the root as platform storage.
     const schools = await prisma.school.findMany({
       select: { id: true, name: true },
     });
@@ -2562,24 +2567,91 @@ router.get(
       }
     }
 
+    // Cloudinary account-level usage: real server disk space and the last
+    // 30 days' delivery bandwidth (what the CDN served). Bandwidth history
+    // is limited to the current billing period by the API — max_bandwidth
+    // is the period cap and bandwidth_used the consumption so far.
+    let cloudinaryUsage: any = null;
+    try {
+      cloudinaryUsage = await cloud.api.usage();
+    } catch {
+      cloudinaryUsage = null; // not configured / network error — degrade gracefully
+    }
+
+    // Real per-school API bandwidth (last 30 days) from the counters
+    const bwRows = await prisma.bandwidthStat.findMany({
+      where: {
+        schoolId: { in: [...nameMap.keys()] },
+        date: { in: dateKeys },
+      },
+    });
+    const bwBySchool = new Map<string, { bytes: number; requests: number }>();
+    for (const row of bwRows) {
+      const cur = bwBySchool.get(row.schoolId) || { bytes: 0, requests: 0 };
+      cur.bytes += row.bytes;
+      cur.requests += row.requests;
+      bwBySchool.set(row.schoolId, cur);
+    }
+
+    // Daily platform-wide API bandwidth series (last 30 days)
+    const dailyBw = await prisma.bandwidthStat.groupBy({
+      by: ["date"],
+      where: { date: { in: dateKeys } },
+      _sum: { bytes: true, requests: true },
+    });
+
     perSchool.sort((a, b) => b.bytes - a.bytes);
-    const totalBytes =
+    const totalStorageBytes =
       perSchool.reduce((s, r) => s + r.bytes, 0) + platformBytes;
+
+    const merged = schools.map((s) => {
+      const files = perSchool.find((p) => p.schoolId === s.id);
+      const bw = bwBySchool.get(s.id) || { bytes: 0, requests: 0 };
+      return {
+        schoolId: s.id,
+        schoolName: s.name,
+        files: files?.files || 0,
+        storageBytes: files?.bytes || 0,
+        apiBytes: bw.bytes,
+        apiRequests: bw.requests,
+      };
+    });
+    merged.sort((a, b) => b.storageBytes - a.storageBytes);
 
     await logPlatformActivity({
       actorId: (req as PlatformAuthRequest).platformUser!.id,
       actorName: (req as PlatformAuthRequest).platformUser!.name,
       actorRole: (req as PlatformAuthRequest).platformUser!.role,
       action: "STORAGE_VIEW",
-      description: "Viewed storage & footprint monitor",
+      description: "Viewed storage, disk & bandwidth monitor",
     });
 
     res.json({
-      totalFiles: perSchool.reduce((s, r) => s + r.files, 0) + platformFiles,
-      totalBytes,
+      // Cloudinary account-level (the actual server disk & CDN bandwidth)
+      cloudinary: cloudinaryUsage
+        ? {
+            storageUsedBytes: cloudinaryUsage.storage?.usage || 0,
+            storageLimitBytes: cloudinaryUsage.storage?.limit || null,
+            bandwidthUsedBytes: cloudinaryUsage.bandwidth?.usage || 0,
+            bandwidthLimitBytes: cloudinaryUsage.bandwidth?.limit || null,
+            objects: cloudinaryUsage.objects || 0,
+            updatedAt: cloudinaryUsage.updated_at || null,
+          }
+        : null,
+      // Per-school merged view (last 30 days for API bandwidth)
+      perSchool: merged,
       platformFiles,
       platformBytes,
-      perSchool,
+      totalStorageBytes,
+      totalApiBytes: merged.reduce((s, r) => s + r.apiBytes, 0),
+      totalApiRequests: merged.reduce((s, r) => s + r.apiRequests, 0),
+      dailyApiSeries: dailyBw
+        .map((d) => ({
+          date: d.date,
+          bytes: d._sum.bytes || 0,
+          requests: d._sum.requests || 0,
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
     });
   }),
 );

@@ -1363,6 +1363,24 @@ model PlatformNotification {
   @@map("platform_notifications")
 }
 
+// ---- Daily API bandwidth counter per school ----
+// One row per school per day, incremented ($inc) by the bandwidth middleware
+// on every API response. bytes = sum of Content-Length of responses served to
+// that school; requests = response count. Gives the Super Admin a real
+// per-school bandwidth/disk-traffic figure without any external provider.
+model BandwidthStat {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String   @db.ObjectId
+  date      String // YYYY-MM-DD (UTC day bucket)
+  bytes     Int      @default(0)
+  requests  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([schoolId, date])
+  @@index([date])
+  @@map("bandwidth_stats")
+}
+
 // ---- Sync monitoring for SmartEdufy Lite offline clients ----
 model SyncLog {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
