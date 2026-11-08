@@ -2556,19 +2556,31 @@ router.get(
 
     for (const fname of folderNames) {
       const schoolId = fname.split("/").pop() as string;
-      let resources: any = { resources: [], next_cursor: undefined };
       let files = 0;
       let bytes = 0;
-      do {
-        resources = await cloud.api.resources_by_asset_folder(fname, {
-          max_results: 500,
-          next_cursor: resources.next_cursor,
-        });
-        for (const r of resources.resources || []) {
-          files++;
-          bytes += r.bytes || 0;
-        }
-      } while (resources.next_cursor);
+      // Cloudinary returns 404 "Folder doesn't exist" for folders that have
+      // no indexed assets yet (e.g. freshly-created or empty ones) and can
+      // also fail transiently — a single bad folder must not 500 the whole
+      // endpoint and take the per-school bandwidth table down with it.
+      try {
+        let resources: any = { resources: [], next_cursor: undefined };
+        do {
+          resources = await cloud.api.resources_by_asset_folder(fname, {
+            max_results: 500,
+            next_cursor: resources.next_cursor,
+          });
+          for (const r of resources.resources || []) {
+            files++;
+            bytes += r.bytes || 0;
+          }
+        } while (resources.next_cursor);
+      } catch (e: any) {
+        console.error(
+          `Cloudinary resources scan failed for "${fname}":`,
+          e?.http_code || "",
+          e?.error?.message || e?.message || e,
+        );
+      }
       const known = nameMap.has(schoolId);
       if (known) {
         perSchool.push({ schoolId, schoolName: nameMap.get(schoolId)!, files, bytes });
@@ -2665,22 +2677,16 @@ router.get(
         .sort((a, b) => a.date.localeCompare(b.date)),
     });
     } catch (e: any) {
-      // Surface the real cause: some errors carry no .message, so log and
-      // return everything we can inspect (message, name, stack, raw value).
-      const detail =
-        e?.message ||
-        e?.name ||
-        (typeof e === "string" ? e : "") ||
-        (() => {
-          try { return JSON.stringify(e); } catch { return String(e); }
-        })();
-      console.error(
-        "[storage] handler failed:",
-        detail,
-        "\nstack:",
-        e?.stack || "(none)",
-      );
-      res.status(500).json({ error: "Internal server error", detail });
+      // SECURITY: never echo the raw error to the client — Cloudinary SDK
+      // errors embed request_options.auth (the API key + secret). Log it
+      // server-side, return only a safe, short cause.
+      const raw =
+        e?.error?.message || e?.message || e?.name || String(e);
+      console.error("[storage] handler failed:", raw, "\nstack:", e?.stack);
+      const safe = raw.includes("auth") || raw.length > 200
+        ? raw.slice(0, 120)
+        : raw;
+      res.status(500).json({ error: "Internal server error", detail: safe });
     }
   }),
 );
