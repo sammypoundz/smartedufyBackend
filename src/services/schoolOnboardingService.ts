@@ -242,24 +242,30 @@ export async function bulkCreateClasses(
   names: string[],
   admin: { id: string; name: string },
 ) {
-  const clean = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
-  const existing = await prisma.class.findMany({
-    where: { schoolId },
-    select: { name: true },
-  });
-  const existingKeys = new Set(
-    existing.map((c) => c.name.toLowerCase().trim()),
-  );
-  const created: string[] = [];
-  for (const name of clean) {
-    if (existingKeys.has(name.toLowerCase())) continue;
-    const cls = await prisma.class.create({ data: { schoolId, name } });
-    await prisma.arm.create({
-      data: { schoolId, letter: "A", classId: cls.id },
+  // The tenant Prisma middleware injects/matches schoolId against the
+  // AsyncLocalStorage tenant context — run inside the school's context so
+  // class + arm creates don't fail with "Cannot create record for a
+  // different tenant" (the wizard routes set no tenant header).
+  return runWithTenant(schoolId, async () => {
+    const clean = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+    const existing = await prisma.class.findMany({
+      where: { schoolId },
+      select: { name: true },
     });
-    created.push(name);
-  }
-  return { created, skipped: clean.length - created.length };
+    const existingKeys = new Set(
+      existing.map((c) => c.name.toLowerCase().trim()),
+    );
+    const created: string[] = [];
+    for (const name of clean) {
+      if (existingKeys.has(name.toLowerCase())) continue;
+      const cls = await prisma.class.create({ data: { schoolId, name } });
+      await prisma.arm.create({
+        data: { schoolId, letter: "A", classId: cls.id },
+      });
+      created.push(name);
+    }
+    return { created, skipped: clean.length - created.length };
+  });
 }
 
 /**
@@ -267,19 +273,22 @@ export async function bulkCreateClasses(
  * exist (case-insensitive).
  */
 export async function bulkCreateSubjects(schoolId: string, names: string[]) {
-  const clean = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
-  const existing = await prisma.subject.findMany({
-    where: { schoolId },
-    select: { name: true },
+  // Same tenant-context requirement as bulkCreateClasses above.
+  return runWithTenant(schoolId, async () => {
+    const clean = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+    const existing = await prisma.subject.findMany({
+      where: { schoolId },
+      select: { name: true },
+    });
+    const existingKeys = new Set(
+      existing.map((s) => s.name.toLowerCase().trim()),
+    );
+    const created: string[] = [];
+    for (const name of clean) {
+      if (existingKeys.has(name.toLowerCase())) continue;
+      await prisma.subject.create({ data: { schoolId, name } });
+      created.push(name);
+    }
+    return { created, skipped: clean.length - created.length };
   });
-  const existingKeys = new Set(
-    existing.map((s) => s.name.toLowerCase().trim()),
-  );
-  const created: string[] = [];
-  for (const name of clean) {
-    if (existingKeys.has(name.toLowerCase())) continue;
-    await prisma.subject.create({ data: { schoolId, name } });
-    created.push(name);
-  }
-  return { created, skipped: clean.length - created.length };
 }
