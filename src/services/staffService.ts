@@ -50,6 +50,31 @@ export const buildStaffResponse = async (user: any) => {
   return staff;
 };
 
+// Helper to ensure an arm exists for a class name, creating a default
+// "A" arm when the class has none yet. Returns the arm id (or null when the
+// class itself doesn't exist). Keeps form-teacher / subject-teacher
+// assignment working even for freshly registered classes without arms.
+export const ensureArmForClass = async (
+  db: typeof prisma | any,
+  className: string,
+  schoolId: string,
+): Promise<string | null> => {
+  if (!className) return null;
+  const klass = await db.class.findFirst({
+    where: { name: className, schoolId },
+  });
+  if (!klass) return null;
+  let arm = await db.arm.findFirst({
+    where: { classId: klass.id, schoolId },
+  });
+  if (!arm) {
+    arm = await db.arm.create({
+      data: { letter: 'A', classId: klass.id, schoolId },
+    });
+  }
+  return arm.id;
+};
+
 // Helper to safely parse assignedSubjects (for bulk upload)
 const parseAssignedSubjects = (subjects: any): { subject: string; class: string }[] => {
   if (!subjects) return [];
@@ -168,12 +193,12 @@ export const staffService = {
         });
 
         if (teacherType === 'class_teacher' && assignedClass) {
-          const arm = await tx.arm.findFirst({
-            where: { class: { name: assignedClass }, schoolId: tenantId },
-          });
-          if (arm) {
+          // Auto-create a default "A" arm when the class has none yet so the
+          // form teacher always lands on a concrete arm.
+          const armId = await ensureArmForClass(tx, assignedClass, tenantId);
+          if (armId) {
             await tx.arm.update({
-              where: { id: arm.id, schoolId: tenantId },
+              where: { id: armId, schoolId: tenantId },
               data: { teacherId: teacher.id },
             });
           }
@@ -184,14 +209,13 @@ export const staffService = {
             const subject = await tx.subject.findFirst({
               where: { name: subj.subject, schoolId: tenantId },
             });
-            const arm = await tx.arm.findFirst({
-              where: { class: { name: subj.class }, schoolId: tenantId },
-            });
-            if (subject && arm) {
+            // Auto-create a default "A" arm when the class has none yet.
+            const armId = await ensureArmForClass(tx, subj.class, tenantId);
+            if (subject && armId) {
               await tx.subjectArm.create({
                 data: {
                   subjectId: subject.id,
-                  armId: arm.id,
+                  armId,
                   teacherId: teacher.id,
                   schoolId: tenantId,
                 },
@@ -285,14 +309,13 @@ export const staffService = {
         where: { teacherId: teacher.id, schoolId: tenantId },
       });
 
-      // Class teacher assignment
+      // Class teacher assignment (auto-creates a default "A" arm when the
+      // class has none yet so the form teacher always lands on a real arm)
       if (teacherType === 'class_teacher' && assignedClass) {
-        const arm = await prisma.arm.findFirst({
-          where: { class: { name: assignedClass }, schoolId: tenantId },
-        });
-        if (arm) {
+        const armId = await ensureArmForClass(prisma, assignedClass, tenantId);
+        if (armId) {
           await prisma.arm.update({
-            where: { id: arm.id, schoolId: tenantId },
+            where: { id: armId, schoolId: tenantId },
             data: { teacherId: teacher.id },
           });
         }
@@ -304,14 +327,13 @@ export const staffService = {
           const subject = await prisma.subject.findFirst({
             where: { name: subj.subject, schoolId: tenantId },
           });
-          const arm = await prisma.arm.findFirst({
-            where: { class: { name: subj.class }, schoolId: tenantId },
-          });
-          if (subject && arm) {
+          // Auto-create a default "A" arm when the class has none yet.
+          const armId = await ensureArmForClass(prisma, subj.class, tenantId);
+          if (subject && armId) {
             await prisma.subjectArm.create({
               data: {
                 subjectId: subject.id,
-                armId: arm.id,
+                armId,
                 teacherId: teacher.id,
                 schoolId: tenantId,
               },
