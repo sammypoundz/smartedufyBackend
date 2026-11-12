@@ -80,7 +80,10 @@ function send_reset_email($to_email, $reset_link) {
             ]
         ];
 
+        // From must be the authenticated mailbox on most cPanel mailservers
+        // (mismatches are silently rejected as relay-attempt).
         $mail->setFrom('smartedufy@pkluster.online', 'SmartEdufy');
+        $mail->addReplyTo('smartedufy@pkluster.online', 'SmartEdufy');
         $mail->addAddress($to_email);
         $mail->isHTML(true);
 
@@ -128,6 +131,10 @@ function send_reset_email($to_email, $reset_link) {
         $mail->send();
         return true;
     } catch (Exception $e) {
+        // Log the REAL PHPMailer error to a file beside this script so the
+        // failure reason can be read on the server (SMTP auth/refusal etc).
+        $err = date('c') . " | to=$to_email | " . $mail->ErrorInfo . "\n";
+        @file_put_contents(__DIR__ . '/mailer_error.log', $err, FILE_APPEND);
         error_log('Password reset mail failed: ' . $mail->ErrorInfo);
         return false;
     }
