@@ -269,8 +269,11 @@ export const reportTemplateService = {
       );
     }
 
-    // Deactivate any existing active assignment covering the same classes
-    // for the same session (+ term when specific).
+    // Deactivate EVERY other active assignment covering the same classes for
+    // the same session — regardless of term/scope. Otherwise an older
+    // SPECIFIC_TERM assignment stays active and shadows a new ALL_TERMS
+    // assignment in resolveTemplateForClass (specific-term wins there).
+    // A class must always resolve to exactly ONE active template.
     const existing = await prisma.reportCardAssignment.findMany({
       where: {
         schoolId: tenantId,
@@ -283,11 +286,7 @@ export const reportTemplateService = {
     for (const a of existing) {
       if (a.templateId === input.templateId) continue;
       const overlap = a.classIds.filter((c) => input.classIds.includes(c));
-      const sameScope =
-        termKey(a) &&
-        (a.assignmentType === input.assignmentType ||
-          input.assignmentType === "SPECIFIC_TERM");
-      if (overlap.length > 0 && sameScope) {
+      if (overlap.length > 0) {
         await prisma.reportCardAssignment.update({
           where: { id: a.id },
           data: { isActive: false },
