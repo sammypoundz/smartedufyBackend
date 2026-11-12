@@ -91,6 +91,10 @@ model User {
   isActive     Boolean  @default(true)
   // Auto-generated or manually assigned ID (e.g. STU-2025-0001), unique per school.
   userIdCode   String?
+  // Password reset: one-time token (random hex) + expiry. Null unless a reset
+  // was requested; consumed (both cleared) on successful reset.
+  resetToken   String?
+  resetTokenExpiry DateTime?
   role         Role     @default(STUDENT)
   // Multi-role support: all roles held by this user (system + custom).
   roles        String[] @default([])
