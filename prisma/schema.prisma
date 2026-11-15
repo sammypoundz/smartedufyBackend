@@ -9,16 +9,16 @@ datasource db {
 
 // ========== TENANT (SCHOOL) ==========
 model School {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  name      String
-  subdomain String?  @unique
-  logoUrl   String?
-  isActive  Boolean  @default(true)
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  name               String
+  subdomain          String?  @unique
+  logoUrl            String?
+  isActive           Boolean  @default(true)
   // When true, the school's admin is funnelled into the self-onboarding
   // wizard on every page load until they finish all 8 stages.
-  onboardingRequired Boolean @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  onboardingRequired Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   // Relations
   users                     User[]
@@ -64,8 +64,8 @@ model School {
   promotionHistories        StudentPromotionHistory[]
   inventoryItems            InventoryItem[]
 
-  auditLogs    AuditLog[]
-  questionDocs QuestionDoc[]
+  auditLogs          AuditLog[]
+  questionDocs       QuestionDoc[]
   onboardingProgress SchoolOnboardingProgress[]
 
   // NEW: Settings models
@@ -75,48 +75,55 @@ model School {
   idGeneratorConfigs  IdGeneratorConfig[]
 
   // AI Report Designer
-  reportCardAssignments  ReportCardAssignment[]
-  generatedReportCards   GeneratedReportCard[]
+  reportCardAssignments ReportCardAssignment[]
+  generatedReportCards  GeneratedReportCard[]
 }
 
 // ========== USER ==========
 model User {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId     String   @db.ObjectId
-  school       School   @relation(fields: [schoolId], references: [id])
-  name         String?
-  email        String   @unique
-  phone        String?
-  password     String
-  isActive     Boolean  @default(true)
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId         String    @db.ObjectId
+  school           School    @relation(fields: [schoolId], references: [id])
+  name             String?
+  email            String    @unique
+  phone            String?
+  password         String
+  isActive         Boolean   @default(true)
   // Auto-generated or manually assigned ID (e.g. STU-2025-0001), unique per school.
-  userIdCode   String?
+  userIdCode       String?
   // Password reset: one-time token (random hex) + expiry. Null unless a reset
   // was requested; consumed (both cleared) on successful reset.
-  resetToken   String?
+  resetToken       String?
   resetTokenExpiry DateTime?
-  role         Role     @default(STUDENT)
+  role             Role      @default(STUDENT)
   // Multi-role support: all roles held by this user (system + custom).
-  roles        String[] @default([])
+  roles            String[]  @default([])
   // Page privileges granted to this user directly (extra, on top of role privileges)
-  allowedPages String[] @default([])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  allowedPages     String[]  @default([])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  student        Student?
-  parent         Parent?
-  teacher        Teacher?
-  payrollEntries Payroll[]
+  student         Student?
+  parent          Parent?
+  teacher         Teacher?
+  payrollEntries  Payroll[]
   biaTransactions BiaPaymentTransaction[]
-  messagesSent   Message[]     @relation("sender")
-  auditLogs      AuditLog[]
-  questionDocs   QuestionDoc[]
+  messagesSent    Message[]               @relation("sender")
+  auditLogs       AuditLog[]
+  questionDocs    QuestionDoc[]
 
   @@index([schoolId, userIdCode])
   @@map("users")
 }
 
 // ========== STUDENT ==========
+// Identity rules (see docs on student registration):
+//  - `studentCode` is the globally-unique, system-generated human identifier
+//    (STD-000001…). It never depends on name/email/phone/admission number.
+//  - Names, emails and phone numbers are contact info — NEVER globally unique.
+//    Two students may share a name (even in the same class/arm).
+//  - `admissionNumber` is unique per SCHOOL only (compound partial unique
+//    index below); the same admission number may exist in different schools.
 model Student {
   id                   String    @id @default(auto()) @map("_id") @db.ObjectId
   schoolId             String    @db.ObjectId
@@ -126,6 +133,8 @@ model Student {
   dateOfBirth          DateTime?
   address              String?
   admissionNumber      String?
+  // System-generated human-readable student identifier (STD-000001).
+  studentCode          String?   @unique
   classId              String?   @db.ObjectId
   armId                String?   @db.ObjectId
   parentId             String?   @db.ObjectId
@@ -142,16 +151,23 @@ model Student {
   arm    Arm?    @relation(fields: [armId], references: [id])
   parent Parent? @relation(fields: [parentId], references: [id])
 
-  attendance       Attendance[]
-  results          Result[]
-  studentSubjects  StudentSubject[]
-  promotionHistory StudentPromotionHistory[]
-  testAttempts     TestAttempt[]
-  feePayments      FeePayment[]
-  assignedFees     StudentFee[]
-  resultEpins      ResultEpin[]
-  linkRequests     ParentStudentLink[]
+  attendance           Attendance[]
+  results              Result[]
+  studentSubjects      StudentSubject[]
+  promotionHistory     StudentPromotionHistory[]
+  testAttempts         TestAttempt[]
+  feePayments          FeePayment[]
+  assignedFees         StudentFee[]
+  resultEpins          ResultEpin[]
+  linkRequests         ParentStudentLink[]
   generatedReportCards GeneratedReportCard[]
+
+  // Admission numbers are optional → partial unique index scoped to the school.
+  // Prisma's MongoDB connector expresses this as a named unique index defined
+  // via @@unique on nullable fields: MongoDB treats missing/null values as
+  // distinct, so students WITHOUT an admission number never collide.
+  @@unique([schoolId, admissionNumber], map: "school_admissionNumber_unique")
+  @@index([schoolId, studentCode])
 }
 
 // ========== PARENT ==========
@@ -861,36 +877,36 @@ model PromotionRule {
 // separate designer template model. AI-generated content lives in the
 // ai*Json blocks (raw JSON stored as Strings to stay schema-flexible).
 model ReportCardTemplate {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId    String   @db.ObjectId
-  school      School   @relation(fields: [schoolId], references: [id])
+  id          String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId    String  @db.ObjectId
+  school      School  @relation(fields: [schoolId], references: [id])
   name        String
   description String?
-  isDefault   Boolean  @default(false)
+  isDefault   Boolean @default(false)
 
   // ---- AI Report Designer fields ----
-  status             String  @default("DRAFT") // DRAFT | PROCESSING | GENERATED | AWAITING_APPROVAL | APPROVED | ARCHIVED | FAILED
-  academicLevel      String? // PRIMARY | JUNIOR_SECONDARY | SENIOR_SECONDARY | NURSERY | OTHER
-  originalFileUrl    String? // preserved upload (local uploads/report-templates/... or Cloudinary)
-  originalFileType   String? // pdf | png | jpg
-  originalPages      Int?    // page count for PDFs / 1 for images
-  htmlTemplate       String? // approved/generated HTML with data placeholders
-  cssTemplate        String? // approved/generated CSS (kept separate from HTML)
-  fieldMappings      String? // JSON: placeholder -> data-source binding map
+  status              String    @default("DRAFT") // DRAFT | PROCESSING | GENERATED | AWAITING_APPROVAL | APPROVED | ARCHIVED | FAILED
+  academicLevel       String? // PRIMARY | JUNIOR_SECONDARY | SENIOR_SECONDARY | NURSERY | OTHER
+  originalFileUrl     String? // preserved upload (local uploads/report-templates/... or Cloudinary)
+  originalFileType    String? // pdf | png | jpg
+  originalPages       Int? // page count for PDFs / 1 for images
+  htmlTemplate        String? // approved/generated HTML with data placeholders
+  cssTemplate         String? // approved/generated CSS (kept separate from HTML)
+  fieldMappings       String? // JSON: placeholder -> data-source binding map
   tableConfigurations String? // JSON: subject-table column order / dynamic-row config
-  pageConfigurations String? // JSON: page size, orientation, margins, multi-page breaks
-  aiProvider         String? // e.g. gemini
-  aiModel            String? // e.g. gemini-3.5-flash
-  generationMetadata String? // JSON: prompts, timings, page images used, warnings
-  generationError    String? // last generation failure message (FAILED status)
-  version            Int     @default(1)
-  previousVersions   String? // JSON array of {version, html, css, savedAt, note}
-  approvedBy         String? @db.ObjectId
-  approvedAt         DateTime?
-  createdBy          String? @db.ObjectId
+  pageConfigurations  String? // JSON: page size, orientation, margins, multi-page breaks
+  aiProvider          String? // e.g. gemini
+  aiModel             String? // e.g. gemini-3.5-flash
+  generationMetadata  String? // JSON: prompts, timings, page images used, warnings
+  generationError     String? // last generation failure message (FAILED status)
+  version             Int       @default(1)
+  previousVersions    String? // JSON array of {version, html, css, savedAt, note}
+  approvedBy          String?   @db.ObjectId
+  approvedAt          DateTime?
+  createdBy           String?   @db.ObjectId
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   assignments    ReportCardAssignment[]
   generatedCards GeneratedReportCard[]
@@ -906,17 +922,17 @@ model ReportCardTemplate {
 // Resolution rule (reportTemplateService.resolveTemplateForClass):
 //   specific-term match wins over all-terms match; latest createdAt breaks ties.
 model ReportCardAssignment {
-  id                String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId          String   @db.ObjectId
-  school            School   @relation(fields: [schoolId], references: [id])
-  templateId        String   @db.ObjectId
+  id                String             @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId          String             @db.ObjectId
+  school            School             @relation(fields: [schoolId], references: [id])
+  templateId        String             @db.ObjectId
   template          ReportCardTemplate @relation(fields: [templateId], references: [id])
   classIds          String[] // class ObjectIds; classes belong to this school
-  academicSessionId String   @db.ObjectId // AcademicYear
-  term              String?  // required when assignmentType = SPECIFIC_TERM
-  assignmentType    String   @default("ALL_TERMS")
-  isActive          Boolean  @default(true)
-  assignedBy        String?  @db.ObjectId
+  academicSessionId String             @db.ObjectId // AcademicYear
+  term              String? // required when assignmentType = SPECIFIC_TERM
+  assignmentType    String             @default("ALL_TERMS")
+  isActive          Boolean            @default(true)
+  assignedBy        String?            @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -929,22 +945,22 @@ model ReportCardAssignment {
 // One row per rendered student PDF. Historical rows are never mutated when a
 // template changes — regeneration creates a NEW row (business rule 9).
 model GeneratedReportCard {
-  id                String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId          String   @db.ObjectId
-  school            School   @relation(fields: [schoolId], references: [id])
-  studentId         String   @db.ObjectId
-  student           Student  @relation(fields: [studentId], references: [id])
-  classId           String   @db.ObjectId
-  templateId        String   @db.ObjectId
+  id                String             @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId          String             @db.ObjectId
+  school            School             @relation(fields: [schoolId], references: [id])
+  studentId         String             @db.ObjectId
+  student           Student            @relation(fields: [studentId], references: [id])
+  classId           String             @db.ObjectId
+  templateId        String             @db.ObjectId
   template          ReportCardTemplate @relation(fields: [templateId], references: [id])
   templateVersion   Int
-  academicSessionId String   @db.ObjectId
+  academicSessionId String             @db.ObjectId
   term              String
-  generatedFileUrl  String?  // local path under uploads/report-cards (served by express.static)
-  generationStatus  String   @default("PENDING") // PENDING | DONE | FAILED
+  generatedFileUrl  String? // local path under uploads/report-cards (served by express.static)
+  generationStatus  String             @default("PENDING") // PENDING | DONE | FAILED
   generationError   String?
   generatedAt       DateTime?
-  generatedBy       String?  @db.ObjectId
+  generatedBy       String?            @db.ObjectId
   publishedAt       DateTime?
 
   createdAt DateTime @default(now())
@@ -1108,18 +1124,18 @@ model PlatformAuditLog {
 // onboarding stages so the Super Admin (and the school's admin) can see and
 // resume exactly where onboarding left off.
 model SchoolOnboardingProgress {
-  id            String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId      String   @unique @db.ObjectId
-  school        School   @relation(fields: [schoolId], references: [id])
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId        String    @unique @db.ObjectId
+  school          School    @relation(fields: [schoolId], references: [id])
   // Completed stage keys: PROFILE | ACADEMIC | CLASSES | SUBJECTS | STAFF
   // | STUDENTS | FEES | FINISH
-  completedStages String[] @default([])
-  stageData     Json?    // free-form answers saved per stage (resumable drafts)
-  currentStage  String   @default("PROFILE")
-  startedAt     DateTime @default(now())
-  completedAt   DateTime?
-  updatedAt     DateTime @updatedAt
-  createdAt     DateTime @default(now())
+  completedStages String[]  @default([])
+  stageData       Json? // free-form answers saved per stage (resumable drafts)
+  currentStage    String    @default("PROFILE")
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime  @default(now())
 
   @@index([updatedAt])
   @@map("school_onboarding_progress")
@@ -1156,32 +1172,32 @@ model SubscriptionPlan {
 
 // ---- School subscriptions ----
 model Subscription {
-  id                   String           @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId             String           @db.ObjectId
-  planId               String           @db.ObjectId
-  plan                 SubscriptionPlan @relation(fields: [planId], references: [id])
-  status               String           @default("ACTIVE")
+  id                     String           @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId               String           @db.ObjectId
+  planId                 String           @db.ObjectId
+  plan                   SubscriptionPlan @relation(fields: [planId], references: [id])
+  status                 String           @default("ACTIVE")
   // ACTIVE | EXPIRED | TRIAL | SUSPENDED | PENDING_RENEWAL
-  billingCycle         String           @default("MONTHLY")
+  billingCycle           String           @default("MONTHLY")
   // MONTHLY | QUARTERLY | TERMLY | HALF_YEARLY | ANNUAL
   // Price per cycle actually charged (allows per-school overrides of the plan price)
-  pricePerCycle        Float?
+  pricePerCycle          Float?
   // Per-school override of the plan's perStudentRate (STUDENT_BASED billing).
   // null = fall back to plan.perStudentRate.
   perStudentRateOverride Float?
   // Per-assignment token override. null = use the plan's default allowance.
   // Lets the super admin decide the bundled tokens (or zero) at assign time,
   // independent of the plan's own default.
-  aiTokenAllowance     Int?
+  aiTokenAllowance       Int?
   // Term/year this cycle covers (STUDENT_BASED billing is tied to the school's term)
-  schoolTermId         String?          @db.ObjectId
-  studentSnapshotCount Int?
-  startDate            DateTime         @default(now())
-  endDate              DateTime
-  trial                Boolean          @default(false)
+  schoolTermId           String?          @db.ObjectId
+  studentSnapshotCount   Int?
+  startDate              DateTime         @default(now())
+  endDate                DateTime
+  trial                  Boolean          @default(false)
   // Cycle lengths in months for computing end dates from payments
-  createdAt            DateTime         @default(now())
-  updatedAt            DateTime         @updatedAt
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
 
   payments SubscriptionPayment[]
 
@@ -1489,7 +1505,7 @@ model TokenPackage {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  purchases PackagePurchase[]
+  purchases       PackagePurchase[]
   biaTransactions BiaPaymentTransaction[]
 
   @@map("token_packages")
@@ -1541,55 +1557,55 @@ model PackagePurchase {
 // (BIAPAY-<internalReference>), so duplicate webhooks / double verification /
 // simultaneous confirmations can never credit a wallet twice.
 model BiaPaymentTransaction {
-  id                String    @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId          String    @db.ObjectId
-  userId            String    @db.ObjectId // initiating user
-  packageId         String?   @db.ObjectId // token package chosen (null = legacy)
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String  @db.ObjectId
+  userId    String  @db.ObjectId // initiating user
+  packageId String? @db.ObjectId // token package chosen (null = legacy)
 
-  provider          String    @default("BIA")
-  purpose           String    @default("EDUFY_AI_TOKEN_PURCHASE")
+  provider String @default("BIA")
+  purpose  String @default("EDUFY_AI_TOKEN_PURCHASE")
 
   // References — internalReference is ours, the others come from BIA.
-  internalReference String    @unique
-  biaReference      String?   @unique
+  internalReference String  @unique
+  biaReference      String? @unique
   merchantReference String? // second reference BIA echoes back
 
   // Pricing: baseAmount is the token cost from TokenPackage (or custom amount
   // priced at the platform token price); feeAmount is a legacy field kept at 0
   // (the processing fee was removed); amount = baseAmount is what the school
   // actually pays and what Paystack verification must match.
-  baseAmount        Float     @default(0) // NGN before the processing fee
-  feeAmount         Float     @default(0) // legacy — no processing fee is charged
-  feeRate           Float     @default(0) // legacy — no processing fee is charged
-  amount            Float // NGN, calculated server-side from TokenPackage
-  currency          String    @default("NGN")
-  tokenQuantity     Int
-  isCustom          Boolean   @default(false) // true = school-entered token count
+  baseAmount    Float   @default(0) // NGN before the processing fee
+  feeAmount     Float   @default(0) // legacy — no processing fee is charged
+  feeRate       Float   @default(0) // legacy — no processing fee is charged
+  amount        Float // NGN, calculated server-side from TokenPackage
+  currency      String  @default("NGN")
+  tokenQuantity Int
+  isCustom      Boolean @default(false) // true = school-entered token count
 
   status            String    @default("PENDING") // PENDING | SUCCESS | FAILED | EXPIRED | REVERSED
   authorizationUrl  String?
   checkoutExpiresAt DateTime?
 
-  customerEmail     String?
-  customerName      String?
-  customerPhone     String?
+  customerEmail String?
+  customerName  String?
+  customerPhone String?
 
-  paidAt            DateTime?
+  paidAt           DateTime?
   // Fulfilled = tokens credited to the wallet exactly once.
-  fulfilled         Boolean   @default(false)
-  fulfilledAt       DateTime?
-  fulfillAttempts   Int       @default(0)
-  lastFulfillError  String?
+  fulfilled        Boolean   @default(false)
+  fulfilledAt      DateTime?
+  fulfillAttempts  Int       @default(0)
+  lastFulfillError String?
 
-  verificationLog   Json? // history of verify/webhook attempts (no secrets)
-  invoiceId         String?   @db.ObjectId // subscription invoice this payment settles
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  verificationLog Json? // history of verify/webhook attempts (no secrets)
+  invoiceId       String?  @db.ObjectId // subscription invoice this payment settles
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  school  School       @relation(fields: [schoolId], references: [id])
-  user    User         @relation(fields: [userId], references: [id])
+  school  School        @relation(fields: [schoolId], references: [id])
+  user    User          @relation(fields: [userId], references: [id])
   package TokenPackage? @relation(fields: [packageId], references: [id])
-  invoice Invoice?     @relation(fields: [invoiceId], references: [id])
+  invoice Invoice?      @relation(fields: [invoiceId], references: [id])
 
   @@index([schoolId, status])
   @@index([createdAt])
@@ -1604,19 +1620,19 @@ model BiaPaymentTransaction {
 // uniqueness within a school; generation is idempotent per
 // student/year/term — re-running regenerate only fills missing rows.
 model ResultEpin {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  schoolId       String   @db.ObjectId
-  school         School   @relation(fields: [schoolId], references: [id])
-  studentId      String   @db.ObjectId
-  student        Student  @relation(fields: [studentId], references: [id])
-  academicYearId String   @db.ObjectId
+  id             String  @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId       String  @db.ObjectId
+  school         School  @relation(fields: [schoolId], references: [id])
+  studentId      String  @db.ObjectId
+  student        Student @relation(fields: [studentId], references: [id])
+  academicYearId String  @db.ObjectId
   term           String // "First Term" | "Second Term" | "Third Term"
 
-  serial  String // printed/visible identifier e.g. EP-XXXX
-  pin     String // secret PIN e.g. 8 uppercase alphanumeric
-  uses    Int      @default(0) // number of times the pin has been redeemed
-  maxUses Int      @default(5) // soft usage cap; exceeded pins are rejected
-  usedAt  DateTime?
+  serial    String // printed/visible identifier e.g. EP-XXXX
+  pin       String // secret PIN e.g. 8 uppercase alphanumeric
+  uses      Int       @default(0) // number of times the pin has been redeemed
+  maxUses   Int       @default(5) // soft usage cap; exceeded pins are rejected
+  usedAt    DateTime?
   expiresAt DateTime? // optional expiry after the term window
 
   createdAt DateTime @default(now())
@@ -1631,31 +1647,31 @@ model ResultEpin {
 
 // ---- Invoice for a subscription cycle (PPS snapshot or fixed tier) ----
 model Invoice {
-  id               String    @id @default(auto()) @map("_id") @db.ObjectId
-  invoiceNo        String    @unique // INV-YYYY-NNNNNN
-  schoolId         String    @db.ObjectId
-  subscriptionId   String?   @db.ObjectId
+  id               String                  @id @default(auto()) @map("_id") @db.ObjectId
+  invoiceNo        String                  @unique // INV-YYYY-NNNNNN
+  schoolId         String                  @db.ObjectId
+  subscriptionId   String?                 @db.ObjectId
   // Dedup: only one invoice per school per billing period key
   periodKey        String // e.g. "2026-01" | "2026-T1" — unique with schoolId
   billingModel     String // FREE | PAY_PER_STUDENT | FIXED_SUBSCRIPTION
-  billingFrequency String    @default("MONTHLY")
+  billingFrequency String                  @default("MONTHLY")
   description      String?
   // Pricing breakdown
   studentSnapshot  Int? // PPS: locked at generation; later enrolment
   // changes do NOT touch this invoice
   pricePerStudent  Float? // NGN per student used for this invoice
   amount           Float
-  currency         String    @default("NGN")
-  status           String    @default("PENDING") // PENDING | PAID | OVERDUE | VOID
+  currency         String                  @default("NGN")
+  status           String                  @default("PENDING") // PENDING | PAID | OVERDUE | VOID
   dueDate          DateTime
   paidAt           DateTime?
   paymentRef       String? // SubscriptionPayment/PackagePurchase linkage
-  paidAmount       Float     @default(0)
+  paidAmount       Float                   @default(0)
   paystackPayments BiaPaymentTransaction[]
-  createdBy        String?   @db.ObjectId // platform user (manual generation)
-  source           String    @default("AUTO") // AUTO (cron) | MANUAL (super admin)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdBy        String?                 @db.ObjectId // platform user (manual generation)
+  source           String                  @default("AUTO") // AUTO (cron) | MANUAL (super admin)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 
   @@unique([schoolId, periodKey])
   @@index([schoolId, status])

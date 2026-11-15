@@ -1,7 +1,79 @@
 import prisma from '../config/db';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { getCurrentTenantId } from '../utils/tenantContext';
 import { syncService } from './syncService';
+
+/*
+ * Student identity helpers
+ * ------------------------
+ * A student's login email is NEVER derived from their name alone: two
+ * students called "John Musa" (same class, same school, or different
+ * schools) must both register successfully. Instead we derive a base from
+ * the name and, on collision, append a short random suffix until the
+ * generated email is free. Names are contact info, not identity.
+ */
+function emailSlug(name: string): string {
+  const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$|\.{2,}/g, '.');
+  return slug || 'student';
+}
+
+/**
+ * Find a free <slug>@student.smartedufy.com login email.
+ * Tries the bare slug first (keeps existing emails stable for the common
+ * case), then appends short random suffixes. Retries bound the loop so a
+ * pathological name can never hang the request.
+ */
+async function allocateStudentEmail(name: string): Promise<string> {
+  const slug = emailSlug(name);
+  const domain = '@student.smartedufy.com';
+  if (!(await prisma.user.findUnique({ where: { email: `${slug}${domain}` } }))) {
+    return `${slug}${domain}`;
+  }
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const suffix = crypto.randomBytes(2).toString('hex'); // e.g. "3f9a"
+    const candidate = `${slug}.${suffix}${domain}`;
+    if (!(await prisma.user.findUnique({ where: { email: candidate } }))) {
+      return candidate;
+    }
+  }
+  // Practically unreachable fallback: timestamp guarantees freshness.
+  return `${slug}.${Date.now()}${domain}`;
+}
+
+/**
+ * Allocate the next globally-unique human student code (STD-000001).
+ * Independent of name/email/phone/admission number. Uses a count-based
+ * starting point then walks forward past any collisions.
+ */
+async function allocateStudentCode(): Promise<string> {
+  const highest = await prisma.student.findFirst({
+    where: { studentCode: { not: null } },
+    orderBy: { studentCode: 'desc' },
+    select: { studentCode: true },
+  });
+  const last = highest?.studentCode?.match(/^STD-(\d+)$/);
+  let next = last ? parseInt(last[1], 10) : 0;
+  for (let i = 0; i < 1000; i++) {
+    next += 1;
+    const code = `STD-${String(next).padStart(6, '0')}`;
+    if (!(await prisma.student.findUnique({ where: { studentCode: code } }))) {
+      return code;
+    }
+  }
+  // Extremely large datasets: fall back to randomness (still STD-prefixed).
+  return `STD-${Date.now().toString().slice(-9).padStart(6, '0')}`;
+}
+
+/** Translate the Mongo duplicate-key error on the school-scoped admission
+ *  number index into a friendly, school-local message. */
+function isAdmissionDupError(err: any): boolean {
+  return (
+    err?.code === 'P2002' &&
+    Array.isArray(err?.meta?.target) &&
+    err.meta.target.some((t: string) => String(t).includes('admissionNumber'))
+  );
+}
 
 export const studentService = {
   // ---------- Existing methods ----------
@@ -60,52 +132,95 @@ export const studentService = {
     }); // middleware adds schoolId
   },
 
+  /**
+   * Register a student in the current school.
+   *
+   * Identity rules:
+   *  - Same NAME as another student (same class/school or elsewhere) → always
+   *    allowed; each gets their own login account with a unique email.
+   *  - Same ADMISSION NUMBER in ANOTHER school → allowed (school-scoped).
+   *  - Same ADMISSION NUMBER in THIS school → rejected with a clear message
+   *    (the DB enforces it too, via the compound unique index).
+   *  - Parent emails/phones are contact info, never identity.
+   */
   create: async (data: { name: string; gender?: string; religion?: string; admissionNumber?: string; classId?: string; armId?: string }) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');
 
-    const email = `${data.name.toLowerCase().replace(/\s/g, '.')}@student.smartedufy.com`;
-    const tempPassword = Math.random().toString(36).slice(-8);
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    // Reuse an existing account for this email if it has no student profile yet
-    // (e.g. orphaned accounts left behind by a previous upload/cleanup). Otherwise
-    // the unique email constraint would make every re-upload fail silently.
-    let user = await prisma.user.findUnique({ where: { email } });
-    if (user) {
-      const linkedStudent = await prisma.student.findUnique({ where: { userId: user.id } });
-      if (linkedStudent) {
-        throw new Error(`Student "${data.name}" already exists (login: ${email}). If this is a re-upload, use a different name or remove the duplicate.`);
-      }
-      if (user.schoolId !== tenantId) {
-        throw new Error(`A user with email ${email} already exists in another school.`);
-      }
-    } else {
-      user = await prisma.user.create({
-        data: {
-          name: data.name,
-          email,
-          password: hashedPassword,
-          role: 'STUDENT',
-          isActive: true,
-          schoolId: tenantId,
-        },
+    // School-scoped admission-number duplicate check — friendly message up
+    // front (the DB index is the backstop under concurrency).
+    const trimmedAdmission = data.admissionNumber?.trim() || undefined;
+    if (trimmedAdmission) {
+      const dupAdmission = await prisma.student.findFirst({
+        where: { schoolId: tenantId, admissionNumber: trimmedAdmission },
+        select: { id: true, name: true },
       });
+      if (dupAdmission) {
+        throw new Error(
+          `Admission number "${trimmedAdmission}" is already used in this school by ${dupAdmission.name}. Use a different admission number.`,
+        );
+      }
     }
 
-    return prisma.student.create({
+    // Class/arm must belong to this school — never allow cross-school assignment.
+    if (data.classId) {
+      const cls = await prisma.class.findFirst({
+        where: { id: data.classId, schoolId: tenantId },
+        select: { id: true },
+      });
+      if (!cls) throw new Error('Selected class does not belong to this school.');
+    }
+    if (data.armId) {
+      const arm = await prisma.arm.findFirst({
+        where: { id: data.armId, schoolId: tenantId },
+        select: { id: true },
+      });
+      if (!arm) throw new Error('Selected arm does not belong to this school.');
+    }
+
+    const tempPassword = Math.random().toString(36).slice(-8);
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    const email = await allocateStudentEmail(data.name);
+
+    const user = await prisma.user.create({
       data: {
         name: data.name,
-        gender: data.gender || '',
-        admissionNumber: data.admissionNumber,
-        classId: data.classId,
-        armId: data.armId,
-        religion: data.religion || undefined,
-        userId: user.id,
+        email,
+        password: hashedPassword,
+        role: 'STUDENT',
+        isActive: true,
         schoolId: tenantId,
       },
-      include: { parent: true },
     });
+
+    const studentCode = await allocateStudentCode();
+
+    try {
+      return await prisma.student.create({
+        data: {
+          name: data.name,
+          gender: data.gender || '',
+          admissionNumber: trimmedAdmission,
+          studentCode,
+          classId: data.classId,
+          armId: data.armId,
+          religion: data.religion || undefined,
+          userId: user.id,
+          schoolId: tenantId,
+        },
+        include: { parent: true },
+      });
+    } catch (err: any) {
+      // Don't leave an orphaned login account behind when the student row
+      // could not be written (e.g. concurrent duplicate admission number).
+      await prisma.user.deleteMany({ where: { id: user.id, role: 'STUDENT' } }).catch(() => {});
+      if (isAdmissionDupError(err)) {
+        throw new Error(
+          `Admission number "${trimmedAdmission}" is already used in this school. Use a different admission number.`,
+        );
+      }
+      throw err;
+    }
   },
 
   async createParentWithUser(parentData: { name: string; email: string; phone?: string }) {
@@ -182,7 +297,21 @@ export const studentService = {
     if (data.gender !== undefined) updateData.gender = data.gender;
     if (data.dateOfBirth !== undefined) updateData.dateOfBirth = data.dateOfBirth ? new Date(data.dateOfBirth) : null;
     if (data.address !== undefined) updateData.address = data.address;
-    if (data.admissionNumber !== undefined) updateData.admissionNumber = data.admissionNumber;
+    if (data.admissionNumber !== undefined) {
+      const trimmed = data.admissionNumber?.trim() || null;
+      if (trimmed) {
+        const dup = await prisma.student.findFirst({
+          where: { schoolId: tenantId, admissionNumber: trimmed, id: { not: id } },
+          select: { id: true, name: true },
+        });
+        if (dup) {
+          throw new Error(
+            `Admission number "${trimmed}" is already used in this school by ${dup.name}. Use a different admission number.`,
+          );
+        }
+      }
+      updateData.admissionNumber = trimmed;
+    }
     if (data.classId !== undefined) updateData.classId = data.classId;
     if (data.armId !== undefined) updateData.armId = data.armId;
     if (data.guardianRelationship !== undefined) updateData.guardianRelationship = data.guardianRelationship;
