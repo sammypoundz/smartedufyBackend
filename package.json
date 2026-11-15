@@ -7,7 +7,7 @@
     "dev": "nodemon src/server.ts",
     "build": "prisma generate && tsc",
     "start": "node dist/server.js",
-    "postinstall": "prisma generate && npm run build",
+    "postinstall": "prisma generate && (puppeteer browsers install chrome || echo Chrome install skipped) && npm run build",
     "seed": "ts-node prisma/seed.ts",
     "test:parent": "ts-node prisma/testParent.ts",
     "seed:goldenlight": "ts-node prisma/newSchoolSeed.ts"

@@ -337,14 +337,52 @@ export async function renderPdf(
     "return import(specifier);",
   ) as any;
   const puppeteer = await dynamicImport("puppeteer");
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
+  /*
+   * Chrome discovery: on hosts where `npx puppeteer browsers install chrome`
+   * hasn't run for the CURRENT user (e.g. Render runs as /opt/render but the
+   * download landed in a different HOME during the build), puppeteer throws
+   * "Could not find Chrome". Fix the underlying issue in two ways:
+   *  1. package.json postinstall now ALSO runs `puppeteer browsers install
+   *     chrome` so every fresh deploy has a browser in its own HOME cache.
+   *  2. As a backstop, if launch fails with that error we trigger the
+   *     install programmatically once and retry — self-healing deploys.
+   */
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+      ],
+    });
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (!/Could not find Chrome|no such file or directory|spawn .*chrome/i.test(msg)) throw err;
+    // Install Chrome for THIS user's cache, then retry the launch once.
+    try {
+      const { install, Browser, resolveBuildId, detectBrowserPlatform } =
+        await dynamicImport("@puppeteer/browsers");
+      const platform = await detectBrowserPlatform();
+      const buildId = await resolveBuildId(Browser.CHROME, platform, "stable");
+      await install({
+        browser: Browser.CHROME,
+        buildId,
+        cacheDir: process.env.PUPPETEER_CACHE_DIR || undefined,
+      });
+    } catch (installErr) {
+      console.error("Puppeteer Chrome auto-install failed:", installErr);
+    }
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+      ],
+    });
+  }
   try {
     const page = await browser.newPage();
     await page.setContent(boundHtml, {
