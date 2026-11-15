@@ -42,6 +42,66 @@ async function allocateStudentEmail(name: string): Promise<string> {
 }
 
 /**
+ * Create the login account for a student, retrying on email collisions.
+ *
+ * The pre-check in allocateStudentEmail is not atomic: two concurrent
+ * creations (or two rows in one bulk upload) can both see an email as
+ * "free" and then race on insert. Instead of failing with a raw P2002,
+ * we catch the unique-violation and retry with a fresh suffix. The final
+ * fallback embeds a millisecond timestamp + random bytes, which cannot
+ * collide with an email allocated earlier in the same run.
+ */
+async function createStudentUser(tenantId: string, name: string): Promise<{ id: string; email: string }> {
+  const slug = emailSlug(name);
+  const domain = '@student.smartedufy.com';
+  const tempPassword = Math.random().toString(36).slice(-8);
+  const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const email =
+      attempt === 0
+        ? await allocateStudentEmail(name) // bare slug, then random suffixes
+        : `${slug}.${crypto.randomBytes(3).toString('hex')}${domain}`; // wider space
+    try {
+      const user = await prisma.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          role: 'STUDENT',
+          isActive: true,
+          schoolId: tenantId,
+        },
+      });
+      return user;
+    } catch (err: any) {
+      const target = err?.meta?.target;
+      const isEmailDup =
+        err?.code === 'P2002' &&
+        (target == null ||
+          (Array.isArray(target) ? target : [target]).some((t: any) => String(t).includes('email')));
+      if (!isEmailDup) throw err;
+      lastError = err;
+    }
+  }
+  // Guaranteed-unique fallback: timestamp makes a prior collision impossible.
+  const email = `${slug}.${Date.now()}${crypto.randomBytes(2).toString('hex')}${domain}`;
+  try {
+    return await prisma.user.create({
+      data: { name, email, password: hashedPassword, role: 'STUDENT', isActive: true, schoolId: tenantId },
+    });
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      throw new Error(
+        `Could not allocate a unique login email for "${name}". Please try again.`,
+      );
+    }
+    throw err;
+  }
+}
+
+/**
  * Allocate the next globally-unique human student code (STD-000001).
  * Independent of name/email/phone/admission number. Uses a count-based
  * starting point then walks forward past any collisions.
@@ -178,20 +238,10 @@ export const studentService = {
       if (!arm) throw new Error('Selected arm does not belong to this school.');
     }
 
-    const tempPassword = Math.random().toString(36).slice(-8);
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-    const email = await allocateStudentEmail(data.name);
-
-    const user = await prisma.user.create({
-      data: {
-        name: data.name,
-        email,
-        password: hashedPassword,
-        role: 'STUDENT',
-        isActive: true,
-        schoolId: tenantId,
-      },
-    });
+    // Login account creation retries internally on email collisions (see
+    // createStudentUser) so concurrent/bulk rows can never fail with a raw
+    // `users_email_key` P2002.
+    const user = await createStudentUser(tenantId, data.name);
 
     const studentCode = await allocateStudentCode();
 
