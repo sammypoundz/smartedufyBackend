@@ -88,8 +88,7 @@ export async function buildTemplateData(opts: {
     include: {
       class: { select: { name: true } },
       arm: { select: { letter: true } },
-      user: { select: { photoUrl: true } },
-    } as any,
+    },
   });
   if (!student)
     throw Object.assign(new Error("Student not found"), { status: 404 });
@@ -184,7 +183,9 @@ export async function buildTemplateData(opts: {
     student: {
       name: esc(student.name),
       admissionNumber: esc(student.admissionNumber || ""),
-      photoUrl: esc((student as any).user?.photoUrl || ""),
+      // The User model has no photo field; student photo isn't stored yet, so
+      // photoUrl binds to an empty string (the template's <img> simply hides).
+      photoUrl: "",
       gender: esc(student.gender),
       className: esc((student as any).class?.name || ""),
       armName: esc((student as any).arm?.letter || ""),
