@@ -39,7 +39,7 @@ exports.SUPPORTED_PLACEHOLDERS = [
     // attendance
     "attendance.present", "attendance.absent", "attendance.total", "attendance.percentage",
     // academics
-    "results.rows", "results.subjectCount", "results.totalScore", "results.average",
+    "results.rows", "results.subjectCount", "results.subjectList", "results.totalScore", "results.average",
     "results.overallGrade", "results.position", "results.studentCount",
     // remarks
     "remarks.teacher", "remarks.principal",
@@ -68,7 +68,7 @@ PLACEHOLDERS (use these EXACT tokens, double-brace style):
 {{student.name}} {{student.admissionNumber}} {{student.photoUrl}} {{student.gender}} {{student.className}} {{student.armName}}
 {{session.year}} {{term.name}} {{term.nextTermBegins}}
 {{attendance.present}} {{attendance.absent}} {{attendance.total}} {{attendance.percentage}}
-{{results.rows}} {{results.subjectCount}} {{results.totalScore}} {{results.average}} {{results.overallGrade}} {{results.position}} {{results.studentCount}}
+{{results.rows}} {{results.subjectCount}} {{results.subjectList}} {{results.totalScore}} {{results.average}} {{results.overallGrade}} {{results.position}} {{results.studentCount}}
 {{remarks.teacher}} {{remarks.principal}} {{signatures.teacher}} {{signatures.principal}} {{signatures.stamp}} {{generated.date}}
 
 RENDERING RULES:

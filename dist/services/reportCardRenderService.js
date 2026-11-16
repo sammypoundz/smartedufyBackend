@@ -78,11 +78,15 @@ async function buildTemplateData(opts) {
              * register design. The AI can name columns sn/studentName/ca1/ca2; bind
              * them to the closest real data so those templates render non-empty:
              *  - sn            → 1-based serial number
-             *  - studentName   → this student's name (each card is one student)
+             *  - studentName   → the SUBJECT's name for this row. The AI often
+             *    generates score-sheet designs whose NAME column actually means
+             *    "subject name" (one row per subject), and there is no separate
+             *    {{row.subject}} token in those designs — so studentName binds to
+             *    the subject to keep those templates meaningful.
              *  - ca1           → the CA score; ca2 → empty (single-CA data model)
              */
             sn: String(rowIndex),
-            studentName: student.name,
+            studentName: subjectName,
             ca1: ca,
             ca2: "",
         };
@@ -168,6 +172,9 @@ async function buildTemplateData(opts) {
             overallGrade: overall,
             position,
             studentCount,
+            // Subjects offered this term, in table order — bindable as
+            // {{results.subjectList}} for templates that list them under the table.
+            subjectList: rows.map((r) => r.subject).join(", "),
         },
         remarks: { teacher: "", principal: "" },
         signatures: { teacher: "", principal: "", stamp: "" },
