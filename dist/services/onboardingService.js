@@ -215,7 +215,6 @@ async function validateAgainstSchool(schoolId, students) {
         }),
     ]);
     const classNames = classes.map((c) => c.name.toLowerCase());
-    const existingNames = new Set(existingStudents.map((s) => s.name.toLowerCase()));
     const existingAdms = new Set(existingStudents.map((s) => s.admissionNumber).filter(Boolean));
     return students.map((s) => {
         const flags = [];
@@ -225,10 +224,11 @@ async function validateAgainstSchool(schoolId, students) {
             flags.push("MISSING_FIELDS");
         if (s.className && !classNames.includes(s.className.toLowerCase()))
             flags.push("CLASS_NOT_FOUND");
+        // Names are contact info, never identity — two students may share a name
+        // (same class/school or across schools). Only an admission number that
+        // already exists in THIS school counts as a genuine duplicate; students are
+        // never merged on name, email or phone similarity.
         if (s.admissionNumber && existingAdms.has(s.admissionNumber)) {
-            flags.push("DUPLICATE");
-        }
-        else if (existingNames.has(s.name.toLowerCase())) {
             flags.push("DUPLICATE");
         }
         if (s.confidence === "low")
@@ -380,18 +380,20 @@ async function registerApprovedStudents(schoolId, batchId, admin) {
                 ? classMap.get(normalizeClassName(rec.className)) || null
                 : null;
             const armId = classId ? armMap.get(classId) || null : null;
-            // Duplicate guard: same admission number or same name in this school
-            const dup = await (0, tenantContext_1.runWithTenant)(schoolId, () => prisma_1.prisma.student.findFirst({
-                where: {
-                    schoolId,
-                    OR: [
-                        ...(rec.admissionNumber
-                            ? [{ admissionNumber: rec.admissionNumber }]
-                            : []),
-                        { name: rec.name },
-                    ],
-                },
-            }));
+            // Duplicate guard: same ADMISSION NUMBER in this school only.
+            // Names are contact info, never identity — two students may share a name
+            // (same class, same school or across schools), so name matches must NOT
+            // be flagged as duplicates and students are never merged across schools
+            // on name/email/phone similarity.
+            const dup = rec.admissionNumber
+                ? await (0, tenantContext_1.runWithTenant)(schoolId, () => prisma_1.prisma.student.findFirst({
+                    where: {
+                        schoolId,
+                        admissionNumber: rec.admissionNumber,
+                    },
+                    select: { id: true, name: true },
+                }))
+                : null;
             if (dup) {
                 await prisma_1.prisma.onboardingRecord.update({
                     where: { id: rec.id },

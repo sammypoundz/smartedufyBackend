@@ -57,6 +57,11 @@ export interface ReportTemplateData {
       total: string;
       grade: string;
       remark: string;
+      // Score-sheet style aliases (single-subject register templates):
+      sn: string;
+      studentName: string;
+      ca1: string;
+      ca2: string;
     }>;
     subjectCount: number;
     totalScore: string;
@@ -114,14 +119,35 @@ export async function buildTemplateData(opts: {
     orderBy: { subjectId: "asc" },
   });
 
-  const rows = results.map((r) => ({
-    subject: r.subject?.name || "—",
-    ca: String(r.ca),
-    exam: String(r.exam),
-    total: String(r.total),
-    grade: r.grade || "—",
-    remark: gradeRemark(r.total),
-  }));
+  const rows = results.map((r, idx) => {
+    const rowIndex = idx + 1;
+    const subjectName = r.subject?.name || "—";
+    const ca = String(r.ca);
+    const exam = String(r.exam);
+    const total = String(r.total);
+    const grade = r.grade || "—";
+    const remark = gradeRemark(r.total);
+    return {
+      // Canonical schema (see aiReportTemplateService.SUPPORTED_PLACEHOLDERS)
+      subject: subjectName,
+      ca,
+      exam,
+      total,
+      grade,
+      remark,
+      /* Aliases for score-sheet style templates generated from a SINGLE-SUBJECT
+       * register design. The AI can name columns sn/studentName/ca1/ca2; bind
+       * them to the closest real data so those templates render non-empty:
+       *  - sn            → 1-based serial number
+       *  - studentName   → this student's name (each card is one student)
+       *  - ca1           → the CA score; ca2 → empty (single-CA data model)
+       */
+      sn: String(rowIndex),
+      studentName: student.name,
+      ca1: ca,
+      ca2: "",
+    };
+  });
 
   const totalScore = rows.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
   const subjectCount = rows.length;

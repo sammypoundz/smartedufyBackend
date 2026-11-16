@@ -13,6 +13,7 @@ const express_1 = require("express");
 const crypto_1 = __importDefault(require("crypto"));
 const prisma_1 = require("../config/prisma");
 const biaPaymentService_1 = require("../services/biaPaymentService");
+const zod_1 = __importDefault(require("zod"));
 const paystackService_1 = require("../services/paystackService");
 const biaPaymentService_2 = require("../services/biaPaymentService");
 const platformSettingsService_1 = require("../services/platformSettingsService");
@@ -61,6 +62,33 @@ router.post("/paystack/initialize", asyncRoute(async (req, res) => {
         amount: result.checkout.amount,
         currency: result.checkout.currency,
         tokenQuantity: result.checkout.tokenQuantity,
+        expiresAt: result.checkout.expiresAt,
+    });
+}));
+// ---------- POST /api/payments/invoice/initialize ----------
+// Start a Paystack bank-transfer checkout to pay one of the school's own
+// subscription invoices. The amount comes from the Invoice row itself.
+router.post("/invoice/initialize", asyncRoute(async (req, res) => {
+    if (!req.user?.id || !req.user?.schoolId)
+        return res.status(401).json({ error: "Unauthorized" });
+    if (!rateLimitInit(req.user.id)) {
+        return res
+            .status(429)
+            .json({ error: "Too many payment attempts — wait a minute and retry" });
+    }
+    const schema = zod_1.default.object({ invoiceId: zod_1.default.string().min(1).max(100) });
+    const { invoiceId } = schema.parse(req.body);
+    const result = await (0, biaPaymentService_1.startInvoiceCheckout)({
+        invoiceId,
+        schoolId: req.user.schoolId,
+        userId: req.user.id,
+        ip: req.ip,
+    });
+    res.status(201).json({
+        reference: result.checkout.reference,
+        authorizationUrl: result.checkout.authorizationUrl,
+        amount: result.checkout.amount,
+        currency: result.checkout.currency,
         expiresAt: result.checkout.expiresAt,
     });
 }));

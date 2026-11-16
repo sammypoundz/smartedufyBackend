@@ -36,7 +36,6 @@ async function buildTemplateData(opts) {
         include: {
             class: { select: { name: true } },
             arm: { select: { letter: true } },
-            user: { select: { photoUrl: true } },
         },
     });
     if (!student)
@@ -59,14 +58,35 @@ async function buildTemplateData(opts) {
         include: { subject: { select: { name: true } } },
         orderBy: { subjectId: "asc" },
     });
-    const rows = results.map((r) => ({
-        subject: r.subject?.name || "—",
-        ca: String(r.ca),
-        exam: String(r.exam),
-        total: String(r.total),
-        grade: r.grade || "—",
-        remark: gradeRemark(r.total),
-    }));
+    const rows = results.map((r, idx) => {
+        const rowIndex = idx + 1;
+        const subjectName = r.subject?.name || "—";
+        const ca = String(r.ca);
+        const exam = String(r.exam);
+        const total = String(r.total);
+        const grade = r.grade || "—";
+        const remark = gradeRemark(r.total);
+        return {
+            // Canonical schema (see aiReportTemplateService.SUPPORTED_PLACEHOLDERS)
+            subject: subjectName,
+            ca,
+            exam,
+            total,
+            grade,
+            remark,
+            /* Aliases for score-sheet style templates generated from a SINGLE-SUBJECT
+             * register design. The AI can name columns sn/studentName/ca1/ca2; bind
+             * them to the closest real data so those templates render non-empty:
+             *  - sn            → 1-based serial number
+             *  - studentName   → this student's name (each card is one student)
+             *  - ca1           → the CA score; ca2 → empty (single-CA data model)
+             */
+            sn: String(rowIndex),
+            studentName: student.name,
+            ca1: ca,
+            ca2: "",
+        };
+    });
     const totalScore = rows.reduce((sum, r) => sum + (Number(r.total) || 0), 0);
     const subjectCount = rows.length;
     const average = subjectCount > 0 ? totalScore / subjectCount : 0;
@@ -123,7 +143,9 @@ async function buildTemplateData(opts) {
         student: {
             name: esc(student.name),
             admissionNumber: esc(student.admissionNumber || ""),
-            photoUrl: esc(student.user?.photoUrl || ""),
+            // The User model has no photo field; student photo isn't stored yet, so
+            // photoUrl binds to an empty string (the template's <img> simply hides).
+            photoUrl: "",
             gender: esc(student.gender),
             className: esc(student.class?.name || ""),
             armName: esc(student.arm?.letter || ""),
@@ -245,14 +267,54 @@ async function renderPdf(boundHtml, pageConfig) {
     // dynamic import via Function so it survives compilation.
     const dynamicImport = new Function("specifier", "return import(specifier);");
     const puppeteer = await dynamicImport("puppeteer");
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-        ],
-    });
+    /*
+     * Chrome discovery: on hosts where `npx puppeteer browsers install chrome`
+     * hasn't run for the CURRENT user (e.g. Render runs as /opt/render but the
+     * download landed in a different HOME during the build), puppeteer throws
+     * "Could not find Chrome". Fix the underlying issue in two ways:
+     *  1. package.json postinstall now ALSO runs `puppeteer browsers install
+     *     chrome` so every fresh deploy has a browser in its own HOME cache.
+     *  2. As a backstop, if launch fails with that error we trigger the
+     *     install programmatically once and retry — self-healing deploys.
+     */
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            headless: true,
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        });
+    }
+    catch (err) {
+        const msg = String(err?.message || err);
+        if (!/Could not find Chrome|no such file or directory|spawn .*chrome/i.test(msg))
+            throw err;
+        // Install Chrome for THIS user's cache, then retry the launch once.
+        try {
+            const { install, Browser, resolveBuildId, detectBrowserPlatform } = await dynamicImport("@puppeteer/browsers");
+            const platform = await detectBrowserPlatform();
+            const buildId = await resolveBuildId(Browser.CHROME, platform, "stable");
+            await install({
+                browser: Browser.CHROME,
+                buildId,
+                cacheDir: process.env.PUPPETEER_CACHE_DIR || undefined,
+            });
+        }
+        catch (installErr) {
+            console.error("Puppeteer Chrome auto-install failed:", installErr);
+        }
+        browser = await puppeteer.launch({
+            headless: true,
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        });
+    }
     try {
         const page = await browser.newPage();
         await page.setContent(boundHtml, {

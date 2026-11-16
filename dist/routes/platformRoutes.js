@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -29,6 +62,7 @@ const tokenWalletService_1 = require("../services/tokenWalletService");
 const platformSettingsService_1 = require("../services/platformSettingsService");
 const billingService_1 = require("../services/billingService");
 const platformNotificationService_1 = require("../services/platformNotificationService");
+const roles_1 = require("./roles");
 const router = (0, express_1.Router)();
 // ---------- helpers ----------
 const startOfDay = (d = new Date()) => {
@@ -308,6 +342,7 @@ router.get("/schools", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMI
                 name: true,
                 subdomain: true,
                 isActive: true,
+                onboardingRequired: true,
                 createdAt: true,
                 updatedAt: true,
                 _count: { select: { students: true, teachers: true, users: true } },
@@ -422,6 +457,7 @@ router.get("/schools/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_
             name: true,
             subdomain: true,
             isActive: true,
+            onboardingRequired: true,
             createdAt: true,
             _count: {
                 select: {
@@ -436,7 +472,7 @@ router.get("/schools/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_
     });
     if (!school)
         return res.status(404).json({ error: "School not found" });
-    const [subscription, wallet, subsPayments, tokenPurchases, tokenCharges, aiCosts, feeBilled, feeCollected, recentUsers, classes, academicYears,] = await Promise.all([
+    const [subscription, wallet, subsPayments, tokenPurchases, tokenCharges, aiCosts, feeBilled, feeCollected, recentUsers, classes, academicYears, onboarding,] = await Promise.all([
         prisma_1.prisma.subscription.findUnique({
             where: { schoolId: school.id },
             include: { plan: true },
@@ -490,6 +526,10 @@ router.get("/schools/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_
             where: { schoolId: school.id, isActive: true },
             select: { name: true },
         }),
+        prisma_1.prisma.schoolOnboardingProgress.findUnique({
+            where: { schoolId: school.id },
+            select: { completedStages: true, currentStage: true, completedAt: true },
+        }),
     ]);
     const tokenPrice = await (0, platformSettingsService_1.getTokenPrice)();
     const schoolFeeBilled = feeBilled._sum.amountAssigned || 0;
@@ -515,6 +555,14 @@ router.get("/schools/:id", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_
         staff: school._count.users,
         subscription,
         wallet,
+        onboarding: onboarding
+            ? {
+                completedStages: onboarding.completedStages,
+                currentStage: onboarding.currentStage,
+                completedAt: onboarding.completedAt,
+                done: onboarding.completedStages.length >= 8,
+            }
+            : null,
         subscriptionPayments: subsPayments,
         tokenPurchases,
         tokenCharges,
@@ -558,6 +606,109 @@ router.patch("/schools/:id/status", auth, (0, platformAuth_1.requirePlatformRole
         ipAddress: req.ip,
     });
     res.json({ id: updated.id, isActive: updated.isActive });
+}));
+// ---- Impersonate a school admin (login-as) -------------------------------
+// Issues a REAL school JWT (same realm /api/auth/login uses) for the school's
+// primary ADMIN so the Super Admin lands straight in that school's panel.
+// Strictly SUPER_ADMIN only, always audited, and 60-minute expiry so a
+// forgotten session cannot linger.
+router.post("/schools/:id/impersonate", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN"), asyncRoute(async (req, res) => {
+    const school = await prisma_1.prisma.school.findUnique({
+        where: { id: String(req.params.id) },
+        select: { id: true, name: true, isActive: true },
+    });
+    if (!school)
+        return res.status(404).json({ error: "School not found" });
+    if (!school.isActive)
+        return res.status(409).json({ error: "This school is suspended — reactivate it before logging in." });
+    // Prefer the school's own ADMIN; fall back to PRINCIPAL.
+    const admin = (await prisma_1.prisma.user.findFirst({
+        where: { schoolId: school.id, role: "ADMIN", isActive: true },
+        orderBy: { createdAt: "asc" },
+    })) ||
+        (await prisma_1.prisma.user.findFirst({
+            where: { schoolId: school.id, role: "PRINCIPAL", isActive: true },
+            orderBy: { createdAt: "asc" },
+        }));
+    if (!admin)
+        return res.status(404).json({ error: "No active admin account exists for this school." });
+    const roles = Array.from(new Set([...(admin.roles || []), admin.role]));
+    const rolePrivileges = await (0, roles_1.resolvePrivileges)(school.id, roles);
+    const privileges = (admin.allowedPages || []).length > 0
+        ? Array.from(new Set(admin.allowedPages))
+        : rolePrivileges;
+    const jwt = (await Promise.resolve().then(() => __importStar(require("jsonwebtoken")))).default;
+    const token = jwt.sign({
+        id: admin.id,
+        role: admin.role,
+        roles,
+        privileges,
+        schoolId: school.id,
+        name: admin.name,
+        email: admin.email,
+        impersonatedBy: req.platformUser.id, // audit trail inside the token
+    }, process.env.JWT_SECRET, { expiresIn: "60m" });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "SCHOOL_IMPERSONATE",
+        targetType: "School",
+        targetId: school.id,
+        description: `Logged in as admin ${admin.email} of ${school.name}`,
+        ipAddress: req.ip,
+    });
+    res.json({
+        token,
+        user: {
+            id: admin.id,
+            name: admin.name,
+            email: admin.email,
+            role: admin.role,
+            roles,
+            privileges,
+            schoolId: school.id,
+        },
+        school: { id: school.id, name: school.name },
+    });
+}));
+// Toggle the self-onboarding wizard requirement for a school. When on, the
+// school's admin sees the onboarding wizard on every page load until all 8
+// stages are complete. ONBOARDING_OFFICER can also toggle it.
+router.patch("/schools/:id/onboarding-required", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "ONBOARDING_OFFICER"), asyncRoute(async (req, res) => {
+    const schema = zod_1.z.object({ required: zod_1.z.boolean() });
+    const { required } = schema.parse(req.body);
+    const school = await prisma_1.prisma.school.findUnique({
+        where: { id: String(req.params.id) },
+    });
+    if (!school)
+        return res.status(404).json({ error: "School not found" });
+    const updated = await prisma_1.prisma.school.update({
+        where: { id: school.id },
+        data: { onboardingRequired: required },
+    });
+    // When requiring onboarding, make sure a progress row exists so the
+    // wizard opens on stage 1 rather than erroring.
+    if (required) {
+        const p = await prisma_1.prisma.schoolOnboardingProgress.findUnique({
+            where: { schoolId: school.id },
+        });
+        if (!p)
+            await prisma_1.prisma.schoolOnboardingProgress.create({ data: { schoolId: school.id } });
+    }
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: required ? "ONBOARDING_REQUIRED" : "ONBOARDING_CLEARED",
+        targetType: "School",
+        targetId: school.id,
+        description: required
+            ? `Assigned the onboarding wizard to ${school.name}`
+            : `Removed the onboarding wizard from ${school.name}`,
+        ipAddress: req.ip,
+    });
+    res.json({ id: updated.id, onboardingRequired: updated.onboardingRequired });
 }));
 // ============================================================
 // MODULE 3 — STUDENT & STAFF ANALYTICS
@@ -868,7 +1019,18 @@ router.post("/subscriptions", auth, (0, platformAuth_1.requirePlatformRole)("SUP
         },
         ipAddress: req.ip,
     });
-    res.status(201).json(sub);
+    // Generate the FIRST invoice right away so the school immediately shows
+    // up in the Invoices table with the per-school price that was just set —
+    // otherwise it would only appear after a payment lands or a cron run.
+    // (FREE plans never get invoices; generateInvoiceForSchool is idempotent
+    // on (schoolId, periodKey), so re-running the cron won't duplicate it.)
+    let firstInvoice = null;
+    if (plan.type !== "FREE") {
+        firstInvoice = await billingService_1.billingService
+            .generateInvoiceForSchool(school.id, "MANUAL", req.platformUser.id)
+            .catch(() => null);
+    }
+    res.status(201).json({ ...sub, invoice: firstInvoice });
 }));
 // Record a verified subscription payment (never marks sub paid without this)
 router.post("/subscriptions/payments", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "FINANCE_ADMIN"), asyncRoute(async (req, res) => {
@@ -1665,6 +1827,390 @@ router.get("/ai/usage", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADM
             .sort((a, b) => a.date.localeCompare(b.date)),
         tokenPrice,
     });
+}));
+// ============================================================
+// MODULE 16 — TRAFFIC & ACTIVITY MONITOR
+// Per-school traffic intelligence assembled entirely from data the platform
+// already records (audit logs, e-Pin result-checker redemptions, population
+// counts, Cloudinary storage) — no extra instrumentation required.
+// ============================================================
+router.get("/traffic", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "ANALYTICS_VIEWER", "SUPPORT_OFFICER"), asyncRoute(async (req, res) => {
+    const windowDays = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+    const since = daysAgo(windowDays);
+    const schools = await prisma_1.prisma.school.findMany({
+        select: { id: true, name: true, isActive: true, createdAt: true },
+        orderBy: { name: "asc" },
+    });
+    const schoolIds = schools.map((s) => s.id);
+    const [schoolUsers, activeSince, byRoleGroups, audit30, failedLogins, epinChecks, topPins, hourlyChecks, resultCounts, authActions,] = await Promise.all([
+        // Population per school, split by role — activity KPIs need the base
+        prisma_1.prisma.user.groupBy({
+            by: ["schoolId", "role"],
+            where: { schoolId: { in: schoolIds }, isActive: true },
+            _count: { id: true },
+        }),
+        // Who did ANYTHING in the window (distinct users in audit log)
+        prisma_1.prisma.auditLog.findMany({
+            where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+            select: { schoolId: true, userId: true },
+            distinct: ["schoolId", "userId"],
+        }),
+        // Activity per role in the window (who is actually using the system)
+        prisma_1.prisma.auditLog.groupBy({
+            by: ["schoolId", "userRole"],
+            where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+            _count: { id: true },
+        }),
+        // Daily action volume per school (traffic trend chart)
+        prisma_1.prisma.auditLog.groupBy({
+            by: ["schoolId"],
+            where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+            _count: { id: true },
+        }),
+        // Failed logins in the window — a security/traffic signal
+        prisma_1.prisma.auditLog.count({
+            where: {
+                schoolId: { in: schoolIds },
+                action: "LOGIN",
+                createdAt: { gte: since },
+                description: { not: { in: ["Logged in"] } },
+            },
+        }),
+        // Public result-checker page traffic (e-Pin redemptions)
+        prisma_1.prisma.resultEpin.groupBy({
+            by: ["schoolId"],
+            where: { schoolId: { in: schoolIds }, usedAt: { gte: since } },
+            _count: { id: true },
+            _sum: { uses: true },
+        }),
+        // Most frequently checked results platform-wide
+        prisma_1.prisma.resultEpin.findMany({
+            where: { schoolId: { in: schoolIds }, uses: { gt: 0 } },
+            orderBy: { uses: "desc" },
+            take: 10,
+            include: {
+                student: { select: { name: true, admissionNumber: true } },
+            },
+        }),
+        // Hour-of-day distribution of result checks (peak visiting hours)
+        prisma_1.prisma.resultEpin.findMany({
+            where: { schoolId: { in: schoolIds }, usedAt: { gte: since } },
+            select: { usedAt: true, uses: true },
+            take: 2000,
+            orderBy: { usedAt: "desc" },
+        }),
+        // School size signals: records created per school
+        Promise.all([
+            prisma_1.prisma.student.groupBy({
+                by: ["schoolId"],
+                where: { schoolId: { in: schoolIds } },
+                _count: { id: true },
+            }),
+            prisma_1.prisma.result.groupBy({
+                by: ["schoolId"],
+                where: { schoolId: { in: schoolIds } },
+                _count: { id: true },
+            }),
+        ]),
+        // Logins vs other actions in the window (auth traffic split)
+        prisma_1.prisma.auditLog.groupBy({
+            by: ["action"],
+            where: { schoolId: { in: schoolIds }, createdAt: { gte: since } },
+            _count: { id: true },
+        }),
+    ]);
+    // ---- index the grouped data ----
+    const popBySchool = new Map();
+    for (const g of schoolUsers) {
+        const cur = popBySchool.get(g.schoolId) ||
+            { students: 0, staff: 0, parents: 0, total: 0 };
+        const n = g._count.id;
+        if (g.role === "STUDENT")
+            cur.students += n;
+        else if (g.role === "PARENT")
+            cur.parents += n;
+        else
+            cur.staff += n; // ADMIN, TEACHER, PRINCIPAL, BURSAR, ...
+        cur.total += n;
+        popBySchool.set(g.schoolId, cur);
+    }
+    const activeUsersBySchool = new Map();
+    for (const row of activeSince) {
+        if (!row.userId)
+            continue;
+        const set = activeUsersBySchool.get(row.schoolId) || new Set();
+        set.add(row.userId);
+        activeUsersBySchool.set(row.schoolId, set);
+    }
+    const roleActivity = new Map();
+    for (const g of byRoleGroups) {
+        const m = roleActivity.get(g.schoolId) || new Map();
+        m.set(g.userRole || "UNKNOWN", g._count.id);
+        roleActivity.set(g.schoolId, m);
+    }
+    const actionsBySchool = new Map(audit30.map((g) => [g.schoolId, g._count.id]));
+    const checksBySchool = new Map(epinChecks.map((g) => [
+        g.schoolId,
+        { visitors: g._count.id, checks: g._sum.uses || 0 },
+    ]));
+    const studentsBySchool = new Map(resultCounts[0].map((g) => [g.schoolId, g._count.id]));
+    const resultsBySchool = new Map(resultCounts[1].map((g) => [g.schoolId, g._count.id]));
+    const totalActions = authActions.reduce((s, a) => s + a._count.id, 0);
+    const loginActions = authActions.find((a) => a.action === "LOGIN")?._count.id || 0;
+    // Hour-of-day histogram for result-checker visits
+    const hourHistogram = Array.from({ length: 24 }, (_, h) => ({
+        hour: h,
+        visits: 0,
+    }));
+    for (const p of hourlyChecks) {
+        if (!p.usedAt)
+            continue;
+        hourHistogram[p.usedAt.getHours()].visits += p.uses;
+    }
+    const rows = schools.map((s) => {
+        const pop = popBySchool.get(s.id) ||
+            { students: 0, staff: 0, parents: 0, total: 0 };
+        const active = activeUsersBySchool.get(s.id)?.size || 0;
+        const actions = actionsBySchool.get(s.id) || 0;
+        const checks = checksBySchool.get(s.id) || { visitors: 0, checks: 0 };
+        const roles = roleActivity.get(s.id) || new Map();
+        const roleMap = {};
+        for (const [k, v] of roles)
+            roleMap[k] = v;
+        return {
+            id: s.id,
+            name: s.name,
+            isActive: s.isActive,
+            ageDays: Math.floor((Date.now() - s.createdAt.getTime()) / (24 * 60 * 60 * 1000)),
+            population: pop,
+            activeUsers: active,
+            activityRate: pop.total > 0
+                ? Math.round((active / pop.total) * 100)
+                : 0,
+            actions,
+            actionsPerUser: active > 0 ? Math.round(actions / active) : 0,
+            resultChecker: {
+                visitors: checks.visitors,
+                checks: checks.checks,
+                visitorsPerStudent: pop.students > 0
+                    ? Math.round((checks.visitors / pop.students) * 100)
+                    : 0,
+            },
+            activityByRole: roleMap,
+            size: {
+                students: studentsBySchool.get(s.id) || 0,
+                results: resultsBySchool.get(s.id) || 0,
+            },
+        };
+    });
+    // Platform-wide roll-up
+    const totals = rows.reduce((a, r) => ({
+        users: a.users + r.population.total,
+        activeUsers: a.activeUsers + r.activeUsers,
+        actions: a.actions + r.actions,
+        resultChecks: a.resultChecks + r.resultChecker.checks,
+        resultVisitors: a.resultVisitors + r.resultChecker.visitors,
+    }), {
+        users: 0,
+        activeUsers: 0,
+        actions: 0,
+        resultChecks: 0,
+        resultVisitors: 0,
+    });
+    await (0, platformAuditService_1.logPlatformActivity)({
+        actorId: req.platformUser.id,
+        actorName: req.platformUser.name,
+        actorRole: req.platformUser.role,
+        action: "TRAFFIC_VIEW",
+        description: `Viewed traffic & activity monitor (${windowDays}-day window)`,
+        ipAddress: req.ip,
+    });
+    res.json({
+        windowDays,
+        totals: {
+            ...totals,
+            activityRate: totals.users > 0
+                ? Math.round((totals.activeUsers / totals.users) * 100)
+                : 0,
+            loginShare: totalActions > 0
+                ? Math.round((loginActions / totalActions) * 100)
+                : 0,
+        },
+        activityByAction: authActions
+            .map((a) => ({ action: a.action, count: a._count.id }))
+            .sort((a, b) => b.count - a.count),
+        resultCheckerHours: hourHistogram,
+        topCheckedResults: topPins.map((p) => ({
+            schoolId: p.schoolId,
+            studentName: p.student.name,
+            admissionNumber: p.student.admissionNumber,
+            term: p.term,
+            uses: p.uses,
+            lastUsedAt: p.usedAt,
+        })),
+        schools: rows.sort((a, b) => b.actions - a.actions),
+    });
+}));
+// ============================================================
+// MODULE 16b — STORAGE, DISK & BANDWIDTH
+// Per-school file footprint (Cloudinary assets per school subfolder) plus
+// account-level server disk & delivery bandwidth from Cloudinary's usage
+// API, and real per-school API bandwidth from the BandwidthStat counters.
+// ============================================================
+router.get("/storage", auth, (0, platformAuth_1.requirePlatformRole)("SUPER_ADMIN", "ANALYTICS_VIEWER"), asyncRoute(async (req, res) => {
+    try {
+        const cloud = (await Promise.resolve().then(() => __importStar(require("../config/cloudinary")))).default;
+        const FOLDER = "smartedufy";
+        const since = daysAgo(30);
+        const dateKeys = [];
+        for (let i = 0; i < 30; i++) {
+            const d = daysAgo(i);
+            dateKeys.push(d.toISOString().slice(0, 10));
+        }
+        // Cloudinary subfolders are per-school: smartedufy/<schoolId>/...
+        // Wrapped so a missing/unreachable Cloudinary config degrades to empty
+        // per-school file counts instead of a 500 (API bandwidth still returns).
+        let folderNames = [];
+        try {
+            const subfolders = await cloud.api.sub_folders(FOLDER, { max_results: 500 });
+            folderNames = (subfolders.folders || []).map((f) => f.name);
+        }
+        catch (e) {
+            console.error("Cloudinary sub_folders scan failed:", e?.http_code || "", e?.message || e);
+            folderNames = []; // not configured / network error — degrade gracefully
+        }
+        const schools = await prisma_1.prisma.school.findMany({
+            select: { id: true, name: true },
+        });
+        const nameMap = new Map(schools.map((s) => [s.id, s.name]));
+        const perSchool = [];
+        let platformFiles = 0;
+        let platformBytes = 0;
+        for (const fname of folderNames) {
+            const schoolId = fname.split("/").pop();
+            let files = 0;
+            let bytes = 0;
+            // Cloudinary returns 404 "Folder doesn't exist" for folders that have
+            // no indexed assets yet (e.g. freshly-created or empty ones) and can
+            // also fail transiently — a single bad folder must not 500 the whole
+            // endpoint and take the per-school bandwidth table down with it.
+            try {
+                let resources = { resources: [], next_cursor: undefined };
+                do {
+                    resources = await cloud.api.resources_by_asset_folder(fname, {
+                        max_results: 500,
+                        next_cursor: resources.next_cursor,
+                    });
+                    for (const r of resources.resources || []) {
+                        files++;
+                        bytes += r.bytes || 0;
+                    }
+                } while (resources.next_cursor);
+            }
+            catch (e) {
+                console.error(`Cloudinary resources scan failed for "${fname}":`, e?.http_code || "", e?.error?.message || e?.message || e);
+            }
+            const known = nameMap.has(schoolId);
+            if (known) {
+                perSchool.push({ schoolId, schoolName: nameMap.get(schoolId), files, bytes });
+            }
+            else {
+                platformFiles += files;
+                platformBytes += bytes;
+            }
+        }
+        // Cloudinary account-level usage: real server disk space and the last
+        // 30 days' delivery bandwidth (what the CDN served). Bandwidth history
+        // is limited to the current billing period by the API — max_bandwidth
+        // is the period cap and bandwidth_used the consumption so far.
+        let cloudinaryUsage = null;
+        try {
+            cloudinaryUsage = await cloud.api.usage();
+        }
+        catch {
+            cloudinaryUsage = null; // not configured / network error — degrade gracefully
+        }
+        // Real per-school API bandwidth (last 30 days) from the counters
+        const bwRows = await prisma_1.prisma.bandwidthStat.findMany({
+            where: {
+                schoolId: { in: [...nameMap.keys()] },
+                date: { in: dateKeys },
+            },
+        });
+        const bwBySchool = new Map();
+        for (const row of bwRows) {
+            const cur = bwBySchool.get(row.schoolId) || { bytes: 0, requests: 0 };
+            cur.bytes += row.bytes;
+            cur.requests += row.requests;
+            bwBySchool.set(row.schoolId, cur);
+        }
+        // Daily platform-wide API bandwidth series (last 30 days)
+        const dailyBw = await prisma_1.prisma.bandwidthStat.groupBy({
+            by: ["date"],
+            where: { date: { in: dateKeys } },
+            _sum: { bytes: true, requests: true },
+        });
+        perSchool.sort((a, b) => b.bytes - a.bytes);
+        const totalStorageBytes = perSchool.reduce((s, r) => s + r.bytes, 0) + platformBytes;
+        const merged = schools.map((s) => {
+            const files = perSchool.find((p) => p.schoolId === s.id);
+            const bw = bwBySchool.get(s.id) || { bytes: 0, requests: 0 };
+            return {
+                schoolId: s.id,
+                schoolName: s.name,
+                files: files?.files || 0,
+                storageBytes: files?.bytes || 0,
+                apiBytes: bw.bytes,
+                apiRequests: bw.requests,
+            };
+        });
+        merged.sort((a, b) => b.storageBytes - a.storageBytes);
+        await (0, platformAuditService_1.logPlatformActivity)({
+            actorId: req.platformUser.id,
+            actorName: req.platformUser.name,
+            actorRole: req.platformUser.role,
+            action: "STORAGE_VIEW",
+            description: "Viewed storage, disk & bandwidth monitor",
+        });
+        res.json({
+            // Cloudinary account-level (the actual server disk & CDN bandwidth)
+            cloudinary: cloudinaryUsage
+                ? {
+                    storageUsedBytes: cloudinaryUsage.storage?.usage || 0,
+                    storageLimitBytes: cloudinaryUsage.storage?.limit || null,
+                    bandwidthUsedBytes: cloudinaryUsage.bandwidth?.usage || 0,
+                    bandwidthLimitBytes: cloudinaryUsage.bandwidth?.limit || null,
+                    objects: cloudinaryUsage.objects || 0,
+                    updatedAt: cloudinaryUsage.updated_at || null,
+                }
+                : null,
+            // Per-school merged view (last 30 days for API bandwidth)
+            perSchool: merged,
+            platformFiles,
+            platformBytes,
+            totalStorageBytes,
+            totalApiBytes: merged.reduce((s, r) => s + r.apiBytes, 0),
+            totalApiRequests: merged.reduce((s, r) => s + r.apiRequests, 0),
+            dailyApiSeries: dailyBw
+                .map((d) => ({
+                date: d.date,
+                bytes: d._sum.bytes || 0,
+                requests: d._sum.requests || 0,
+            }))
+                .sort((a, b) => a.date.localeCompare(b.date)),
+        });
+    }
+    catch (e) {
+        // SECURITY: never echo the raw error to the client — Cloudinary SDK
+        // errors embed request_options.auth (the API key + secret). Log it
+        // server-side, return only a safe, short cause.
+        const raw = e?.error?.message || e?.message || e?.name || String(e);
+        console.error("[storage] handler failed:", raw, "\nstack:", e?.stack);
+        const safe = raw.includes("auth") || raw.length > 200
+            ? raw.slice(0, 120)
+            : raw;
+        res.status(500).json({ error: "Internal server error", detail: safe });
+    }
 }));
 // ============================================================
 // MODULE 11 — SYSTEM HEALTH

@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.staffService = exports.buildStaffResponse = void 0;
+exports.staffService = exports.ensureArmForClass = exports.buildStaffResponse = void 0;
 const db_1 = __importDefault(require("../config/db"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const tenantContext_1 = require("../utils/tenantContext");
@@ -50,6 +50,29 @@ const buildStaffResponse = async (user) => {
     return staff;
 };
 exports.buildStaffResponse = buildStaffResponse;
+// Helper to ensure an arm exists for a class name, creating a default
+// "A" arm when the class has none yet. Returns the arm id (or null when the
+// class itself doesn't exist). Keeps form-teacher / subject-teacher
+// assignment working even for freshly registered classes without arms.
+const ensureArmForClass = async (db, className, schoolId) => {
+    if (!className)
+        return null;
+    const klass = await db.class.findFirst({
+        where: { name: className, schoolId },
+    });
+    if (!klass)
+        return null;
+    let arm = await db.arm.findFirst({
+        where: { classId: klass.id, schoolId },
+    });
+    if (!arm) {
+        arm = await db.arm.create({
+            data: { letter: 'A', classId: klass.id, schoolId },
+        });
+    }
+    return arm.id;
+};
+exports.ensureArmForClass = ensureArmForClass;
 // Helper to safely parse assignedSubjects (for bulk upload)
 const parseAssignedSubjects = (subjects) => {
     if (!subjects)
@@ -156,12 +179,12 @@ exports.staffService = {
                     },
                 });
                 if (teacherType === 'class_teacher' && assignedClass) {
-                    const arm = await tx.arm.findFirst({
-                        where: { class: { name: assignedClass }, schoolId: tenantId },
-                    });
-                    if (arm) {
+                    // Auto-create a default "A" arm when the class has none yet so the
+                    // form teacher always lands on a concrete arm.
+                    const armId = await (0, exports.ensureArmForClass)(tx, assignedClass, tenantId);
+                    if (armId) {
                         await tx.arm.update({
-                            where: { id: arm.id, schoolId: tenantId },
+                            where: { id: armId, schoolId: tenantId },
                             data: { teacherId: teacher.id },
                         });
                     }
@@ -171,14 +194,13 @@ exports.staffService = {
                         const subject = await tx.subject.findFirst({
                             where: { name: subj.subject, schoolId: tenantId },
                         });
-                        const arm = await tx.arm.findFirst({
-                            where: { class: { name: subj.class }, schoolId: tenantId },
-                        });
-                        if (subject && arm) {
+                        // Auto-create a default "A" arm when the class has none yet.
+                        const armId = await (0, exports.ensureArmForClass)(tx, subj.class, tenantId);
+                        if (subject && armId) {
                             await tx.subjectArm.create({
                                 data: {
                                     subjectId: subject.id,
-                                    armId: arm.id,
+                                    armId,
                                     teacherId: teacher.id,
                                     schoolId: tenantId,
                                 },
@@ -261,14 +283,13 @@ exports.staffService = {
             await db_1.default.subjectArm.deleteMany({
                 where: { teacherId: teacher.id, schoolId: tenantId },
             });
-            // Class teacher assignment
+            // Class teacher assignment (auto-creates a default "A" arm when the
+            // class has none yet so the form teacher always lands on a real arm)
             if (teacherType === 'class_teacher' && assignedClass) {
-                const arm = await db_1.default.arm.findFirst({
-                    where: { class: { name: assignedClass }, schoolId: tenantId },
-                });
-                if (arm) {
+                const armId = await (0, exports.ensureArmForClass)(db_1.default, assignedClass, tenantId);
+                if (armId) {
                     await db_1.default.arm.update({
-                        where: { id: arm.id, schoolId: tenantId },
+                        where: { id: armId, schoolId: tenantId },
                         data: { teacherId: teacher.id },
                     });
                 }
@@ -279,14 +300,13 @@ exports.staffService = {
                     const subject = await db_1.default.subject.findFirst({
                         where: { name: subj.subject, schoolId: tenantId },
                     });
-                    const arm = await db_1.default.arm.findFirst({
-                        where: { class: { name: subj.class }, schoolId: tenantId },
-                    });
-                    if (subject && arm) {
+                    // Auto-create a default "A" arm when the class has none yet.
+                    const armId = await (0, exports.ensureArmForClass)(db_1.default, subj.class, tenantId);
+                    if (subject && armId) {
                         await db_1.default.subjectArm.create({
                             data: {
                                 subjectId: subject.id,
-                                armId: arm.id,
+                                armId,
                                 teacherId: teacher.id,
                                 schoolId: tenantId,
                             },

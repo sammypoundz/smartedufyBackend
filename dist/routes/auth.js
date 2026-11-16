@@ -15,7 +15,120 @@ const roles_1 = require("./roles");
 const auditService_1 = require("../services/auditService");
 const idGeneratorService_1 = require("../services/idGeneratorService");
 const roles_2 = require("./roles");
+const crypto_1 = __importDefault(require("crypto"));
 const router = (0, express_1.Router)();
+// ============================ Password reset endpoints ============================
+// Emails the reset link through the school's PHP mailer at pkluster.online
+// (same SMTP transport as the OTP mailer). The backend stores a hashed,
+// single-use, 1-hour token on the user record; the PHP script only sends.
+const PASSWORD_MAILER_URL = process.env.PASSWORD_RESET_MAILER_URL ||
+    'https://pkluster.online/smartedufy/password_reset_mailer.php';
+// Frontend page that consumes the reset link (token in the query string).
+const RESET_PASSWORD_PAGE_URL = process.env.RESET_PASSWORD_PAGE_URL || 'https://smartedufy.ng/reset-password';
+async function sendResetLinkEmail(email, resetLink) {
+    const res = await fetch(PASSWORD_MAILER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, reset_link: resetLink }),
+    });
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Reset mailer responded ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const data = (await res.json().catch(() => null));
+    if (!data?.success) {
+        throw new Error(data?.error || 'Reset mailer failed');
+    }
+}
+// POST /api/auth/forgot-password { email } — always 200 (never reveals whether
+// the email exists). Sends the reset link when the account exists.
+router.post('/forgot-password', async (req, res, next) => {
+    try {
+        const { email } = zod_1.z
+            .object({ email: zod_1.z.string().email('A valid email is required') })
+            .parse(req.body);
+        const normalised = email.toLowerCase().trim();
+        const user = await prisma_1.prisma.user.findUnique({ where: { email: normalised } });
+        if (user?.isActive) {
+            // Single-use random token; only its SHA-256 hash is stored.
+            const token = crypto_1.default.randomBytes(32).toString('hex');
+            const hashed = crypto_1.default.createHash('sha256').update(token).digest('hex');
+            await prisma_1.prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    resetToken: hashed,
+                    resetTokenExpiry: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+                },
+            });
+            const link = `${RESET_PASSWORD_PAGE_URL}?token=${token}&email=${encodeURIComponent(normalised)}`;
+            try {
+                await sendResetLinkEmail(normalised, link);
+            }
+            catch (mailErr) {
+                console.error('Forgot-password mail error:', mailErr?.message || mailErr);
+                return res.status(502).json({
+                    error: 'Could not send the reset email right now. Please try again shortly.',
+                });
+            }
+        }
+        // Same response either way — no account enumeration.
+        res.json({
+            message: 'If an account exists for that email, a password reset link has been sent. Check your inbox (and spam folder).',
+        });
+    }
+    catch (err) {
+        next(err);
+    }
+});
+// POST /api/auth/reset-password { token, email, password } — consumes the token.
+router.post('/reset-password', async (req, res, next) => {
+    try {
+        const { token, email, password } = zod_1.z
+            .object({
+            token: zod_1.z.string().min(10),
+            email: zod_1.z.string().email(),
+            password: zod_1.z.string().min(6, 'Password must be at least 6 characters'),
+        })
+            .parse(req.body);
+        const user = await prisma_1.prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
+        const hashed = crypto_1.default.createHash('sha256').update(token).digest('hex');
+        if (!user ||
+            !user.resetToken ||
+            user.resetToken !== hashed ||
+            !user.resetTokenExpiry ||
+            user.resetTokenExpiry.getTime() < Date.now()) {
+            return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
+        }
+        const hashedPassword = await bcryptjs_1.default.hash(password, 10);
+        await prisma_1.prisma.user.update({
+            where: { id: user.id },
+            data: {
+                password: hashedPassword,
+                resetToken: null,
+                resetTokenExpiry: null,
+            },
+        });
+        (0, auditService_1.logActivity)({
+            schoolId: user.schoolId,
+            userId: user.id,
+            userName: user.name,
+            userEmail: user.email,
+            userRole: user.role,
+            action: 'PASSWORD_RESET',
+            entity: 'User',
+            entityId: user.id,
+            description: 'Password reset via email link',
+            method: 'POST',
+            path: '/api/auth/reset-password',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+        });
+        res.json({ message: 'Password reset successfully. You can now log in with your new password.' });
+    }
+    catch (err) {
+        next(err);
+    }
+});
 // Public: list active schools for the teacher registration page's
 // school picker (no auth required – only exposes id + name).
 router.get('/schools', async (_req, res, next) => {

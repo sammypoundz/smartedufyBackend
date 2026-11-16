@@ -45,12 +45,14 @@ const platformRoutes_1 = __importDefault(require("./routes/platformRoutes"));
 const platformOnboardingRoutes_1 = __importDefault(require("./routes/platformOnboardingRoutes"));
 const tokenRoutes_1 = __importDefault(require("./routes/tokenRoutes"));
 const reportTemplateRoutes_1 = __importDefault(require("./routes/reportTemplateRoutes"));
+const schoolOnboardingRoutes_1 = __importDefault(require("./routes/schoolOnboardingRoutes"));
 const billingService_1 = require("./services/billingService");
 // Import middleware
 const errorHandler_1 = require("./middleware/errorHandler");
 const auth_2 = require("./middleware/auth");
 const tenant_1 = require("./middleware/tenant");
 const audit_1 = require("./middleware/audit");
+const bandwidth_1 = require("./middleware/bandwidth");
 const db_1 = __importDefault(require("./config/db"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
@@ -80,6 +82,10 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'SmartEdufy API is running' });
 });
 app.use('/api/auth', auth_1.default); // login, register, etc.
+// Result checker e-Pins — /check is public (no auth); admin routes carry
+// their own authMiddleware inside the router.
+const epinRoutes_1 = __importDefault(require("./routes/epinRoutes"));
+app.use('/api/epins', epinRoutes_1.default);
 // ---------- Paystack webhook — PUBLIC, must bypass auth/tenant ----------
 // (the webhook body is HMAC-verified with PAYSTACK_SECRET_KEY, then only
 // triggers a server-side re-verify — it can never credit tokens directly)
@@ -99,6 +105,7 @@ app.use('/api/platform/onboarding', platformOnboardingRoutes_1.default);
 app.use(auth_2.authMiddleware); // sets req.user
 app.use(tenant_1.tenantMiddleware); // sets tenant context & validates user belongs to tenant
 app.use(audit_1.auditMiddleware); // logs every mutating request
+app.use(bandwidth_1.bandwidthMiddleware); // counts per-school response bytes (bandwidth)
 // ---------- Protected routes (require authentication & tenant) ----------
 app.use('/api/classes', classes_1.default);
 app.use('/api/arms', arms_1.default);
@@ -140,6 +147,8 @@ const parentLinkRoutes_1 = __importDefault(require("./routes/parentLinkRoutes"))
 app.use('/api/timetable-workflow', timetableWorkflowRoutes_1.default);
 app.use('/api/parent-links', parentLinkRoutes_1.default);
 app.use('/api', reportTemplateRoutes_1.default); // /api/report-templates + /api/report-cards
+// School SELF-ONBOARDING wizard — the school's admin sets up their own school
+app.use('/api/onboarding', schoolOnboardingRoutes_1.default);
 // Error handler
 app.use(errorHandler_1.errorHandler);
 app.listen(port, () => {

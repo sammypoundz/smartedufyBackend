@@ -180,10 +180,17 @@ exports.studentController = {
             console.error('Create student error:', err);
             if (err.name === 'ZodError')
                 return res.status(400).json({ error: err.errors });
-            if (typeof err.message === 'string' && err.message.includes('already exists')) {
-                return res.status(409).json({ error: err.message });
+            const msg = typeof err.message === 'string' ? err.message : '';
+            // Duplicate admission number in THIS school → 409 with actionable text.
+            if (msg.includes('already used in this school') || msg.includes('already exists')) {
+                return res.status(409).json({ error: msg });
             }
-            res.status(500).json({ error: 'Failed to create student' });
+            // Cross-school class/arm assignment or other validation failures → 400.
+            if (msg.includes('does not belong to this school') ||
+                msg.includes('Tenant context missing') === false && msg.length > 0 && msg !== 'Tenant context missing' && /required|invalid|not found/i.test(msg)) {
+                return res.status(400).json({ error: msg });
+            }
+            res.status(500).json({ error: msg || 'Failed to create student' });
         }
     },
     update: async (req, res) => {
