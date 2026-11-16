@@ -287,11 +287,18 @@ async function gradeFor(
 
 // ------------------------------ Data binding ------------------------------
 
-/** Fill simple {{placeholders}} (everything except the dynamic rows token). */
+/** Fill simple {{placeholders}} (everything except the dynamic-rows tokens). */
 function bindSimple(html: string, data: ReportTemplateData): string {
   return html.replace(/\{\{([^}]+)\}\}/g, (match, key: string) => {
     const k = key.trim();
-    if (k === "results.rows") return match; // handled by bindRows
+    // Preserve tokens handled elsewhere:
+    //  - results.rows       → the dynamic <tbody> marker (bindRows)
+    //  - row.<field>        → per-subject row placeholders inside the prototype
+    //                         <tr> (bindRows). CRITICAL: bindSimple must NOT
+    //                         touch these — `data.row` doesn't exist, so
+    //                         resolving them here would blank every cell
+    //                         before the row cloner runs.
+    if (k === "results.rows" || k.startsWith("row.")) return match;
     const parts = k.split(".");
     let cur: any = data;
     for (const p of parts) cur = cur?.[p];
