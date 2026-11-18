@@ -10,6 +10,23 @@ const addToArmSchema = z.object({
   teacherId: z.string().optional(),
 });
 
+const bulkCreateSubjectsSchema = z.object({
+  subjects: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().optional(),
+      })
+    )
+    .min(1),
+});
+
+const bulkAssignSchema = z.object({
+  subjectIds: z.array(z.string()).min(1),
+  armIds: z.array(z.string()).min(1),
+  teacherId: z.string().optional(),
+});
+
 const updateArmSubjectSchema = z.object({
   teacherId: z.string().optional(),
 });
@@ -146,6 +163,38 @@ export const subjectController = {
         return res.status(400).json({ error: err.errors });
       }
       res.status(500).json({ error: 'Failed to add subject to arm' });
+    }
+  },
+
+  bulkCreate: async (req: Request, res: Response) => {
+    try {
+      const { subjects } = bulkCreateSubjectsSchema.parse(req.body);
+      const results = await subjectService.bulkCreate(subjects);
+      const created = results.filter((r) => r.status === 'created').length;
+      const duplicates = results.filter((r) => r.status !== 'created').length;
+      res.status(201).json({ results, created, duplicates });
+    } catch (err: any) {
+      console.error('Bulk create subjects error:', err);
+      if (err.name === 'ZodError') {
+        return res.status(400).json({ error: err.errors });
+      }
+      res.status(500).json({ error: 'Failed to bulk create subjects' });
+    }
+  },
+
+  bulkAssignToArms: async (req: Request, res: Response) => {
+    try {
+      const { subjectIds, armIds, teacherId } = bulkAssignSchema.parse(req.body);
+      const results = await subjectService.bulkLinkToArms(subjectIds, armIds, teacherId);
+      const linked = results.filter((r) => r.status === 'linked').length;
+      const alreadyAssigned = results.filter((r) => r.status === 'already_assigned').length;
+      res.status(201).json({ results, linked, alreadyAssigned });
+    } catch (err: any) {
+      console.error('Bulk assign subjects error:', err);
+      if (err.name === 'ZodError') {
+        return res.status(400).json({ error: err.errors });
+      }
+      res.status(500).json({ error: 'Failed to bulk assign subjects' });
     }
   },
 

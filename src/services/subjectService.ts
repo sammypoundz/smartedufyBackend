@@ -142,6 +142,134 @@ export const subjectService = {
     return link;
   },
 
+  /**
+   * Bulk-create subjects with validation.
+   * Returns per-row results so the caller can report created/duplicates.
+   */
+  bulkCreate: async (
+    names: { name: string; description?: string }[],
+  ) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    const results: {
+      name: string;
+      status: 'created' | 'duplicate_in_payload' | 'already_exists';
+      subject?: { id: string; name: string; description?: string | null };
+    }[] = [];
+
+    const seen = new Set<string>();
+
+    for (const row of names) {
+      const key = row.name.trim().toLowerCase();
+      if (!key) {
+        results.push({ name: row.name, status: 'duplicate_in_payload' });
+        continue;
+      }
+      if (seen.has(key)) {
+        results.push({ name: row.name, status: 'duplicate_in_payload' });
+        continue;
+      }
+      seen.add(key);
+
+      const existing = await prisma.subject.findFirst({
+        where: { schoolId: tenantId, name: row.name.trim() },
+      });
+      if (existing) {
+        results.push({
+          name: row.name,
+          status: 'already_exists',
+          subject: { id: existing.id, name: existing.name, description: existing.description },
+        });
+        continue;
+      }
+
+      const subject = await prisma.subject.create({
+        data: {
+          name: row.name.trim(),
+          description: row.description?.trim() || null,
+          schoolId: tenantId,
+        },
+      });
+      results.push({
+        name: row.name,
+        status: 'created',
+        subject: { id: subject.id, name: subject.name, description: subject.description },
+      });
+    }
+
+    return results;
+  },
+
+  /**
+   * Bulk-link subjects to arms (idempotent, validates every pair).
+   * Returns per-pair results.
+   */
+  bulkLinkToArms: async (
+    subjectIds: string[],
+    armIds: string[],
+    teacherId?: string,
+  ) => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Tenant context missing');
+
+    const arms = await prisma.arm.findMany({
+      where: { id: { in: armIds }, schoolId: tenantId },
+      select: { id: true },
+    });
+    const validArmIds = new Set(arms.map((a) => a.id));
+
+    const subjects = await prisma.subject.findMany({
+      where: { id: { in: subjectIds }, schoolId: tenantId },
+      select: { id: true },
+    });
+    const validSubjectIds = new Set(subjects.map((s) => s.id));
+
+    if (teacherId) {
+      const teacher = await prisma.teacher.findFirst({
+        where: { id: teacherId, schoolId: tenantId },
+      });
+      if (!teacher) throw new Error('Teacher not found in this school');
+    }
+
+    const existingLinks = await prisma.subjectArm.findMany({
+      where: { schoolId: tenantId, subjectId: { in: subjectIds }, armId: { in: armIds } },
+      select: { subjectId: true, armId: true },
+    });
+    const linkKey = (sid: string, aid: string) => `${sid}|${aid}`;
+    const existingKeys = new Set(existingLinks.map((l) => linkKey(l.subjectId, l.armId)));
+
+    const results: { subjectId: string; armId: string; status: 'linked' | 'already_assigned' | 'invalid_subject' | 'invalid_arm' }[] = [];
+
+    for (const armId of armIds) {
+      for (const subjectId of subjectIds) {
+        if (!validSubjectIds.has(subjectId)) {
+          results.push({ subjectId, armId, status: 'invalid_subject' });
+          continue;
+        }
+        if (!validArmIds.has(armId)) {
+          results.push({ subjectId, armId, status: 'invalid_arm' });
+          continue;
+        }
+        if (existingKeys.has(linkKey(subjectId, armId))) {
+          results.push({ subjectId, armId, status: 'already_assigned' });
+          continue;
+        }
+        existingKeys.add(linkKey(subjectId, armId));
+        await prisma.subjectArm.create({
+          data: { subjectId, armId, teacherId, schoolId: tenantId },
+        });
+        if (teacherId) {
+          await syncService.ensureSubjectTeacher(prisma, tenantId, subjectId, teacherId);
+        }
+        await syncService.syncStudentSubjectsForArm(tenantId, armId);
+        results.push({ subjectId, armId, status: 'linked' });
+      }
+    }
+
+    return results;
+  },
+
   updateArmSubject: async (id: string, teacherId?: string) => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Tenant context missing');

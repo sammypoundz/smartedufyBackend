@@ -9,6 +9,8 @@ const router = Router();
 router.get('/arm/:armId', authMiddleware, subjectController.getByArmId);
 router.post('/arm/:armId', authMiddleware, privilegeGuard('subjects'), subjectController.addToArm);
 router.patch('/arm-subjects/:id', authMiddleware, privilegeGuard('subjects'), subjectController.updateArmSubject);
+router.post('/bulk', authMiddleware, privilegeGuard('subjects'), subjectController.bulkCreate);
+router.post('/bulk-assign', authMiddleware, privilegeGuard('subjects'), subjectController.bulkAssignToArms);
 router.delete('/arm/:armId/:subjectId', authMiddleware, privilegeGuard('subjects'), subjectController.removeFromArm);
 
 // ✅ NEW: Delete a subject‑arm relation directly (used to remove a subject from a teacher)
