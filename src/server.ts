@@ -32,6 +32,7 @@ import payrollRoutes from './routes/payrollRoutes';
 import staffRoutes from './routes/staff';
 import messageRoutes from './routes/messageRoutes';
 import inventoryRoutes from './routes/inventoryRoutes';
+import libraryRoutes from './routes/libraryRoutes';
 import settingsRoutes from './routes/settingsRoutes';
 import auditLogRoutes from './routes/auditLogs';
 import questionDocRoutes from './routes/questionDocRoutes';
@@ -147,6 +148,7 @@ app.use('/api/payroll', payrollRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/library', libraryRoutes);
 app.use('/api/settings', settingsRoutes)
 app.use('/api/audit-logs', auditLogRoutes);
 app.use('/api/question-docs', questionDocRoutes);

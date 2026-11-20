@@ -36,6 +36,7 @@ export const ALL_PRIVILEGES: PagePrivilege[] = [
   { key: "users", label: "User Management", group: "Administration" },
   { key: "roles", label: "Roles & Privileges", group: "Administration" },
   { key: "inventory", label: "Inventory", group: "Administration" },
+  { key: "library", label: "Library", group: "Administration" },
   { key: "settings", label: "Settings", group: "Administration" },
   { key: "audit-logs", label: "Audit Logs", group: "Administration" },
 ];
@@ -76,7 +77,7 @@ export const SYSTEM_ROLE_PRIVILEGES: Record<string, string[]> = {
   ],
   BURSAR: ["fees", "expenses", "reports", "inventory"],
   ACCOUNTANT: ["fees", "expenses", "payroll"],
-  LIBRARIAN: ["inventory", "students"],
+  LIBRARIAN: ["library", "inventory", "students", "fees"],
 };
 
 export const DEFAULT_ROLES: {

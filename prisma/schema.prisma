@@ -63,6 +63,9 @@ model School {
   resultEpins               ResultEpin[]
   promotionHistories        StudentPromotionHistory[]
   inventoryItems            InventoryItem[]
+  books                     Book[]
+  bookLoans                 BookLoan[]
+  bookFees                  BookFee[]
 
   auditLogs          AuditLog[]
   questionDocs       QuestionDoc[]
@@ -161,6 +164,8 @@ model Student {
   resultEpins          ResultEpin[]
   linkRequests         ParentStudentLink[]
   generatedReportCards GeneratedReportCard[]
+  bookLoans            BookLoan[]
+  bookFees             BookFee[]
 
   // Admission numbers are optional → partial unique index scoped to the school.
   // Prisma's MongoDB connector expresses this as a named unique index defined
@@ -854,6 +859,78 @@ model InventoryItem {
   updatedAt DateTime @updatedAt
 
   @@map("inventory_items")
+}
+
+// ========== LIBRARY ==========
+// A book title owned by the school library. `totalCopies` is the number of
+// physical copies; `availableCopies` decreases when copies are loaned out and
+// increases when they are returned.
+model Book {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId        String   @db.ObjectId
+  school          School   @relation(fields: [schoolId], references: [id])
+  title           String
+  author          String?
+  isbn            String?
+  category        String?
+  price           Float    @default(0) // selling/fee price per copy (NGN)
+  totalCopies     Int      @default(0)
+  availableCopies Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  loans    BookLoan[]
+  bookFees BookFee[]
+
+  @@index([schoolId, title])
+  @@map("books")
+}
+
+// One physical copy checked out to a student.
+// Status: ON_LOAN -> RETURNED. OVERDUE is derived from dueDate at read time.
+model BookLoan {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId  String    @db.ObjectId
+  school    School    @relation(fields: [schoolId], references: [id])
+  bookId    String    @db.ObjectId
+  book      Book      @relation(fields: [bookId], references: [id])
+  studentId String    @db.ObjectId
+  student   Student   @relation(fields: [studentId], references: [id])
+  issuedAt  DateTime  @default(now())
+  dueDate   DateTime
+  returnedAt DateTime?
+  status    String    @default("ON_LOAN") // ON_LOAN | RETURNED
+  notes     String?
+
+  @@index([schoolId, bookId])
+  @@index([schoolId, studentId])
+  @@index([schoolId, status])
+  @@map("book_loans")
+}
+
+// Per-student charge for a book (e.g. workbooks/textbooks sold to a class).
+// Paid charges can be pushed into the school fees system (StudentFee/FeePayment)
+// so book fees appear on the student's fee account.
+model BookFee {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  schoolId   String    @db.ObjectId
+  school     School    @relation(fields: [schoolId], references: [id])
+  bookId     String    @db.ObjectId
+  book       Book      @relation(fields: [bookId], references: [id])
+  studentId  String    @db.ObjectId
+  student    Student   @relation(fields: [studentId], references: [id])
+  amount     Float
+  paid       Boolean   @default(false)
+  paidAt     DateTime?
+  // Set once the charge has been pushed into the school fees ledger to
+  // prevent double-pushing (idempotency guard).
+  pushedToFeesAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([studentId, bookId])
+  @@index([schoolId, paid])
+  @@map("book_fees")
 }
 
 // ========== PROMOTION RULE ==========
