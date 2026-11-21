@@ -441,6 +441,37 @@ export const libraryController = {
         });
       }
 
+      // Make the book charge visible on the Fees page: append a
+      // `Book: <title>` item to the fee structure's per-student breakdown
+      // (idempotent) and recompute the class-wide totalAmount the same way
+      // feeService does (per-student sum × active student count).
+      const bookItemName = `Book: ${book.title}`;
+      const breakdown = Array.isArray(feeStructure.breakdown)
+        ? ([...((feeStructure.breakdown as any[]) || [])] as {
+            name: string;
+            amount: number;
+          }[])
+        : [];
+      if (!breakdown.some((i) => i.name === bookItemName)) {
+        const sampleAmount = charges[0]?.amount ?? 0;
+        breakdown.push({ name: bookItemName, amount: sampleAmount });
+        const perStudentAmount = breakdown.reduce((s, i) => s + (i.amount || 0), 0);
+        const studentCount = await prisma.student.count({
+          where: {
+            schoolId: tenantId,
+            isActive: true,
+            class: { name: feeStructure.className },
+          },
+        });
+        await prisma.feeStructure.update({
+          where: { id: feeStructure.id },
+          data: {
+            breakdown: breakdown as any,
+            totalAmount: perStudentAmount * studentCount,
+          },
+        });
+      }
+
       let pushed = 0;
       const errors: string[] = [];
       for (const charge of charges) {
@@ -498,8 +529,10 @@ export const libraryController = {
                 paymentDate: new Date(),
                 paymentMethod: "BOOK_FEE",
                 reference: `BOOK-${charge.bookId.slice(-6)}`,
+                // Key must be `itemName` — the Fees page (getItemOwedAmounts)
+                // and feeService.recordPayment both read item.itemName.
                 breakdownItems: [
-                  { label: `Book: ${book.title}`, amount: charge.amount },
+                  { itemName: bookItemName, amount: charge.amount },
                 ] as any,
                 status: "PAID",
               },
