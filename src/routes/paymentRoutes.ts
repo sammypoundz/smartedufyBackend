@@ -19,6 +19,10 @@ import {
 import z from "zod";
 import { paystackConfigured } from "../services/paystackService";
 import { TOKEN_FEE_RATE } from "../services/biaPaymentService";
+import {
+  parentFeePaymentService,
+  ParentPaymentError,
+} from "../services/parentFeePaymentService";
 import { getTokenPrice } from "../services/platformSettingsService";
 import { logPlatformActivity } from "../services/platformAuditService";
 
@@ -106,6 +110,76 @@ router.post(
       currency: result.checkout.currency,
       expiresAt: result.checkout.expiresAt,
     });
+  }),
+);
+
+// ============================================================
+// PARENT SCHOOL-FEE PAYMENTS — Paystack hosted checkout.
+// The parent pays their child's outstanding school fees online.
+// ============================================================
+
+// ---------- POST /api/payments/school-fees/initialize ----------
+router.post(
+  "/school-fees/initialize",
+  asyncRoute(async (req: any, res: Response) => {
+    if (!req.user?.id || !req.user?.schoolId)
+      return res.status(401).json({ error: "Unauthorized" });
+    // Resolve the logged-in user's Parent profile (null for staff/admins —
+    // they may pay on behalf of a student without an ownership check).
+    const parentProfile = await prisma.parent.findUnique({
+      where: { userId: req.user.id },
+      select: { id: true },
+    });
+    const result = await parentFeePaymentService.startFeePayment({
+      parentId: parentProfile?.id || null,
+      parentUser: {
+        id: req.user.id,
+        email: req.user.email,
+        name: req.user.name,
+      },
+      schoolId: req.user.schoolId,
+      body: req.body,
+    });
+    res.status(201).json(result);
+  }),
+);
+
+// ---------- GET /api/payments/school-fees/:reference/status ----------
+// Parent (or staff) checks a fee payment's status. Also triggers a
+// server-side Paystack re-verify for PENDING transactions.
+router.get(
+  "/school-fees/:reference/status",
+  asyncRoute(async (req: any, res: Response) => {
+    if (!req.user?.schoolId)
+      return res.status(401).json({ error: "Unauthorized" });
+    const status = await parentFeePaymentService.getFeePaymentStatus(
+      String(req.params.reference),
+      req.user.schoolId,
+    );
+
+    // Reconcile PENDING ones so a returning parent gets fresh status.
+    let current: any = status;
+    if (status.status === "PENDING") {
+      const txn = await prisma.biaPaymentTransaction.findFirst({
+        where: {
+          internalReference: String(req.params.reference),
+          schoolId: req.user.schoolId,
+        },
+        select: { id: true },
+      });
+      if (txn) {
+        const r = await parentFeePaymentService
+          .reconcileFeePayment(txn.id, "STATUS_POLL")
+          .catch(() => null);
+        if (r) {
+          current = await parentFeePaymentService.getFeePaymentStatus(
+            String(req.params.reference),
+            req.user.schoolId,
+          );
+        }
+      }
+    }
+    res.json(current);
   }),
 );
 

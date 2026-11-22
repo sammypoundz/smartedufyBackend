@@ -550,7 +550,27 @@ export const studentService = {
 
   getStudentFees: async (studentId: string) => {
     try {
-      return [];
+      // StudentFee rows joined with their fee structure = the student's real
+      // fee account (assigned vs paid per class fee structure/term).
+      const rows = await prisma.studentFee.findMany({
+        where: { studentId },
+        include: {
+          feeStructure: {
+            select: { id: true, className: true, term: true, totalAmount: true, deadline: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      return rows.map((r) => ({
+        id: r.id,
+        feeStructureId: r.feeStructureId,
+        className: r.feeStructure?.className || '',
+        term: r.feeStructure?.term || '',
+        deadline: r.feeStructure?.deadline || null,
+        amount: r.amountAssigned,
+        amountPaid: r.amountPaid,
+        status: r.status,
+      }));
     } catch {
       return [];
     }
