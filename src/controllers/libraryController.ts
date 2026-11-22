@@ -425,26 +425,24 @@ export const libraryController = {
         return res.status(404).json({ error: "Fee structure not found" });
       }
 
-      const charges = await prisma.bookFee.findMany({
-        where: {
-          schoolId: tenantId,
-          bookId: data.bookId,
-          pushedToFeesAt: null,
-          ...(data.onlyPaid ? { paid: true } : {}),
-        },
+      // All charges for this book (regardless of pushed state) — used for the
+      // breakdown sync and the "already pushed" count in the response.
+      const allBookCharges = await prisma.bookFee.findMany({
+        where: { schoolId: tenantId, bookId: data.bookId },
         include: { student: { select: { name: true } } },
       });
-      if (!charges.length) {
-        return res.json({
-          pushed: 0,
-          message: "No unpushed charges match the filter",
-        });
-      }
+      // Only unpushed charges get a StudentFee/FeePayment row.
+      const charges = allBookCharges.filter(
+        (c) =>
+          c.pushedToFeesAt === null &&
+          (!data.onlyPaid || c.paid),
+      );
+      const alreadyPushed = allBookCharges.length - allBookCharges.filter((c) => c.pushedToFeesAt === null).length;
 
-      // Make the book charge visible on the Fees page: append a
-      // `Book: <title>` item to the fee structure's per-student breakdown
-      // (idempotent) and recompute the class-wide totalAmount the same way
-      // feeService does (per-student sum × active student count).
+      // ALWAYS sync the class fee structure's breakdown, even when there is
+      // nothing new to push: charges pushed before the breakdown sync existed
+      // are already marked pushed but were never added to the fee breakdown.
+      // This also covers the "No unpushed charges match the filter" case.
       const bookItemName = `Book: ${book.title}`;
       const breakdown = Array.isArray(feeStructure.breakdown)
         ? ([...((feeStructure.breakdown as any[]) || [])] as {
@@ -453,7 +451,8 @@ export const libraryController = {
           }[])
         : [];
       if (!breakdown.some((i) => i.name === bookItemName)) {
-        const sampleAmount = charges[0]?.amount ?? 0;
+        const sampleAmount =
+          allBookCharges.find((c) => c.amount > 0)?.amount ?? 0;
         breakdown.push({ name: bookItemName, amount: sampleAmount });
         const perStudentAmount = breakdown.reduce((s, i) => s + (i.amount || 0), 0);
         const studentCount = await prisma.student.count({
@@ -469,6 +468,18 @@ export const libraryController = {
             breakdown: breakdown as any,
             totalAmount: perStudentAmount * studentCount,
           },
+        });
+      }
+
+      if (!charges.length) {
+        return res.json({
+          pushed: 0,
+          alreadyPushed,
+          message: alreadyPushed
+            ? `No new charges to push — ${alreadyPushed} charge(s) for this book were already pushed. The "${bookItemName}" item has been added to the fee breakdown.`
+            : data.onlyPaid
+              ? "No charges match the filter — nothing is marked as paid yet (uncheck 'Only push charges already marked as paid' to push owing ones)."
+              : `No book charges exist for this book yet — charge a class first on the Library page.`,
         });
       }
 
@@ -549,7 +560,7 @@ export const libraryController = {
           );
         }
       }
-      res.json({ pushed, errors });
+      res.json({ pushed, alreadyPushed, errors });
     } catch (err: any) {
       if (err.name === "ZodError")
         return res.status(400).json({ error: err.errors });
