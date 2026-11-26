@@ -126,13 +126,17 @@ async function allocateStudentCode(): Promise<string> {
 }
 
 /** Translate the Mongo duplicate-key error on Student.studentCode into a
- *  retryable signal so the caller can allocate a fresh code and retry. */
+ *  retryable signal so the caller can allocate a fresh code and retry.
+ *  Matches BOTH the structured P2002 target and the raw Prisma message
+ *  ("Unique constraint failed on the constraint: `Student_studentCode_key`"),
+ *  because meta.target is not reliably populated on every connector. */
 function isStudentCodeDupError(err: any): boolean {
-  return (
-    err?.code === 'P2002' &&
-    Array.isArray(err?.meta?.target) &&
-    err.meta.target.some((t: string) => String(t).includes('studentCode'))
-  );
+  if (!err) return false;
+  if (err.code === 'P2002' && Array.isArray(err.meta?.target)) {
+    if (err.meta.target.some((t: string) => String(t).includes('studentCode'))) return true;
+  }
+  const msg = typeof err.message === 'string' ? err.message : '';
+  return msg.includes('studentCode') || msg.includes('Student_studentCode_key');
 }
 
 /** Translate the Mongo duplicate-key error on the school-scoped admission
