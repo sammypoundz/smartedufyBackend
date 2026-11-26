@@ -105,15 +105,21 @@ async function createStudentUser(tenantId: string, name: string): Promise<{ id: 
  * Allocate the next globally-unique human student code (STD-000001).
  * Independent of name/email/phone/admission number. Uses a count-based
  * starting point then walks forward past any collisions.
+ *
+ * `after` lets the caller skip every code at/below a value known to be
+ * taken (e.g. by another school — the Prisma tenant middleware scopes the
+ * "is this code free?" lookup to the current school, but the unique index
+ * on studentCode is GLOBAL across schools, so a code owned by another
+ * school passes the scoped check yet fails the insert).
  */
-async function allocateStudentCode(): Promise<string> {
+async function allocateStudentCode(after = 0): Promise<string> {
   const highest = await prisma.student.findFirst({
     where: { studentCode: { not: null } },
     orderBy: { studentCode: 'desc' },
     select: { studentCode: true },
   });
   const last = highest?.studentCode?.match(/^STD-(\d+)$/);
-  let next = last ? parseInt(last[1], 10) : 0;
+  let next = Math.max(after, last ? parseInt(last[1], 10) : 0);
   for (let i = 0; i < 1000; i++) {
     next += 1;
     const code = `STD-${String(next).padStart(6, '0')}`;
@@ -263,8 +269,9 @@ export const studentService = {
     // Rather than failing the whole request with a raw P2002, allocate a new
     // code and retry — up to 5 times before giving up.
     let lastCodeError: any = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const studentCode = await allocateStudentCode();
+    let skipBelow = 0; // highest colliding code number seen (codes are STD-NNNNNN)
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const studentCode = await allocateStudentCode(skipBelow);
       try {
         const created = await prisma.student.create({
           data: {
@@ -284,7 +291,13 @@ export const studentService = {
       } catch (err: any) {
         if (isStudentCodeDupError(err)) {
           lastCodeError = err;
-          continue; // take the next free code and retry
+          // The code we just tried is taken (possibly by another school —
+          // the school-scoped free-check can't see it). Record its number
+          // so the next allocation starts strictly above it.
+          const m = /^STD-(\d+)$/.exec(studentCode);
+          const failed = m ? parseInt(m[1], 10) : null;
+          if (failed !== null && failed > skipBelow) skipBelow = failed;
+          continue;
         }
         // Don't leave an orphaned login account behind when the student row
         // could not be written (e.g. concurrent duplicate admission number).
