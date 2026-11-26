@@ -212,8 +212,18 @@ export const staffService = {
             // Auto-create a default "A" arm when the class has none yet.
             const armId = await ensureArmForClass(tx, subj.class, tenantId);
             if (subject && armId) {
-              await tx.subjectArm.create({
-                data: {
+              // Upsert so an already-existing SubjectArm row (e.g. created
+              // for another teacher) doesn't violate the unique constraint.
+              await tx.subjectArm.upsert({
+                where: {
+                  schoolId_subjectId_armId: {
+                    schoolId: tenantId,
+                    subjectId: subject.id,
+                    armId,
+                  },
+                },
+                update: { teacherId: teacher.id },
+                create: {
                   subjectId: subject.id,
                   armId,
                   teacherId: teacher.id,
@@ -300,13 +310,17 @@ export const staffService = {
         }
       }
 
-      // Clear existing assignments (tenant-scoped)
+      // Clear existing assignments (tenant-scoped).
+      // NOTE: SubjectArm rows are detached (teacherId set to null) rather than
+      // deleted — the subject+arm row itself must survive because it carries
+      // the unique (schoolId, subjectId, armId) identity used elsewhere.
       await prisma.arm.updateMany({
         where: { teacherId: teacher.id, schoolId: tenantId },
         data: { teacherId: null },
       });
-      await prisma.subjectArm.deleteMany({
+      await prisma.subjectArm.updateMany({
         where: { teacherId: teacher.id, schoolId: tenantId },
+        data: { teacherId: null },
       });
 
       // Class teacher assignment (auto-creates a default "A" arm when the
@@ -330,8 +344,20 @@ export const staffService = {
           // Auto-create a default "A" arm when the class has none yet.
           const armId = await ensureArmForClass(prisma, subj.class, tenantId);
           if (subject && armId) {
-            await prisma.subjectArm.create({
-              data: {
+            // Upsert: a SubjectArm row for this subject+arm may already exist
+            // (unassigned or held by another teacher). Creating it again would
+            // violate @@unique([schoolId, subjectId, armId]) and 500 the
+            // request — attach this teacher to the row instead.
+            await prisma.subjectArm.upsert({
+              where: {
+                schoolId_subjectId_armId: {
+                  schoolId: tenantId,
+                  subjectId: subject.id,
+                  armId,
+                },
+              },
+              update: { teacherId: teacher.id },
+              create: {
                 subjectId: subject.id,
                 armId,
                 teacherId: teacher.id,
