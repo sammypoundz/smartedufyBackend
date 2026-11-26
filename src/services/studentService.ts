@@ -125,6 +125,16 @@ async function allocateStudentCode(): Promise<string> {
   return `STD-${Date.now().toString().slice(-9).padStart(6, '0')}`;
 }
 
+/** Translate the Mongo duplicate-key error on Student.studentCode into a
+ *  retryable signal so the caller can allocate a fresh code and retry. */
+function isStudentCodeDupError(err: any): boolean {
+  return (
+    err?.code === 'P2002' &&
+    Array.isArray(err?.meta?.target) &&
+    err.meta.target.some((t: string) => String(t).includes('studentCode'))
+  );
+}
+
 /** Translate the Mongo duplicate-key error on the school-scoped admission
  *  number index into a friendly, school-local message. */
 function isAdmissionDupError(err: any): boolean {
@@ -243,34 +253,49 @@ export const studentService = {
     // `users_email_key` P2002.
     const user = await createStudentUser(tenantId, data.name);
 
-    const studentCode = await allocateStudentCode();
-
-    try {
-      return await prisma.student.create({
-        data: {
-          name: data.name,
-          gender: data.gender || '',
-          admissionNumber: trimmedAdmission,
-          studentCode,
-          classId: data.classId,
-          armId: data.armId,
-          religion: data.religion || undefined,
-          userId: user.id,
-          schoolId: tenantId,
-        },
-        include: { parent: true },
-      });
-    } catch (err: any) {
-      // Don't leave an orphaned login account behind when the student row
-      // could not be written (e.g. concurrent duplicate admission number).
-      await prisma.user.deleteMany({ where: { id: user.id, role: 'STUDENT' } }).catch(() => {});
-      if (isAdmissionDupError(err)) {
-        throw new Error(
-          `Admission number "${trimmedAdmission}" is already used in this school. Use a different admission number.`,
-        );
+    // Retry on studentCode unique collisions: two concurrent creations (or a
+    // differently-backfilled code) can race past the "is this code free?"
+    // check in allocateStudentCode and both insert the same STD-XXXXXX code.
+    // Rather than failing the whole request with a raw P2002, allocate a new
+    // code and retry — up to 5 times before giving up.
+    let lastCodeError: any = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const studentCode = await allocateStudentCode();
+      try {
+        const created = await prisma.student.create({
+          data: {
+            name: data.name,
+            gender: data.gender || '',
+            admissionNumber: trimmedAdmission,
+            studentCode,
+            classId: data.classId,
+            armId: data.armId,
+            religion: data.religion || undefined,
+            userId: user.id,
+            schoolId: tenantId,
+          },
+          include: { parent: true },
+        });
+        return created;
+      } catch (err: any) {
+        if (isStudentCodeDupError(err)) {
+          lastCodeError = err;
+          continue; // take the next free code and retry
+        }
+        // Don't leave an orphaned login account behind when the student row
+        // could not be written (e.g. concurrent duplicate admission number).
+        await prisma.user.deleteMany({ where: { id: user.id, role: 'STUDENT' } }).catch(() => {});
+        if (isAdmissionDupError(err)) {
+          throw new Error(
+            `Admission number "${trimmedAdmission}" is already used in this school. Use a different admission number.`,
+          );
+        }
+        throw err;
       }
-      throw err;
     }
+    // Exhausted retries — clean up the login account and surface the error.
+    await prisma.user.deleteMany({ where: { id: user.id, role: 'STUDENT' } }).catch(() => {});
+    throw lastCodeError ?? new Error('Could not allocate a unique student code');
   },
 
   async createParentWithUser(parentData: { name: string; email: string; phone?: string }) {
