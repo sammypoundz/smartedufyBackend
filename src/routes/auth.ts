@@ -183,12 +183,121 @@ router.post('/register-school', async (req, res, next) => {
     const existingSchool = await prisma.school.findFirst({
       where: { name: { equals: data.schoolName, mode: 'insensitive' } },
     });
-    if (existingSchool) {
-      return res.status(409).json({ error: 'A school with this name already exists.' });
-    }
     const existingUser = await prisma.user.findUnique({ where: { email: data.email } });
     if (existingUser) {
       return res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
+    }
+
+    // Registering an admin into an EXISTING school: the account is only
+    // auto-valid if the school has no active admin yet (they become the
+    // first admin). Otherwise the new admin is created INACTIVE and must be
+    // approved/activated by an existing admin before their login works.
+    if (existingSchool) {
+      const adminCount = await prisma.user.count({
+        where: { schoolId: existingSchool.id, role: 'ADMIN', isActive: true },
+      });
+      if (adminCount === 0) {
+        // No active admin — this signup becomes the school's first admin.
+        const hashedPassword = await bcrypt.hash(data.password, 10);
+        const admin = await runWithTenant(existingSchool.id, async () => {
+          const userIdCode = await idGeneratorService.claimNextId('ADMIN');
+          return prisma.user.create({
+            data: {
+              name: data.adminName,
+              email: data.email,
+              phone: data.phone || null,
+              password: hashedPassword,
+              role: 'ADMIN',
+              isActive: true,
+              schoolId: existingSchool.id,
+              userIdCode,
+            },
+          });
+        });
+        await ensureSystemRoles(existingSchool.id);
+        logActivity({
+          schoolId: existingSchool.id,
+          userId: admin.id,
+          userName: admin.name,
+          userEmail: admin.email,
+          userRole: 'ADMIN',
+          action: 'ADMIN_SIGNUP',
+          entity: 'User',
+          entityId: admin.id,
+          description: `Admin account ${admin.email} registered for existing school "${existingSchool.name}" (first admin)`,
+          method: 'POST',
+          path: '/api/auth/register-school',
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'],
+        });
+        const token = jwt.sign(
+          { id: admin.id, role: 'ADMIN', roles: ['ADMIN'], schoolId: existingSchool.id },
+          process.env.JWT_SECRET!,
+          { expiresIn: '7d' }
+        );
+        return res.status(201).json({
+          token,
+          pendingApproval: false,
+          school: { id: existingSchool.id, name: existingSchool.name },
+          user: {
+            id: admin.id,
+            name: admin.name,
+            email: admin.email,
+            role: 'ADMIN',
+            roles: ['ADMIN'],
+            isActive: true,
+            schoolId: existingSchool.id,
+            userIdCode: admin.userIdCode,
+          },
+        });
+      }
+
+      // School already has an active admin → the new admin account is
+      // created inactive and needs approval before login is valid.
+      const hashedPassword = await bcrypt.hash(data.password, 10);
+      const admin = await runWithTenant(existingSchool.id, async () => {
+        const userIdCode = await idGeneratorService.claimNextId('ADMIN');
+        return prisma.user.create({
+          data: {
+            name: data.adminName,
+            email: data.email,
+            phone: data.phone || null,
+            password: hashedPassword,
+            role: 'ADMIN',
+            isActive: false,
+            schoolId: existingSchool.id,
+            userIdCode,
+          },
+        });
+      });
+      logActivity({
+        schoolId: existingSchool.id,
+        userId: admin.id,
+        userName: admin.name,
+        userEmail: admin.email,
+        userRole: 'ADMIN',
+        action: 'ADMIN_SIGNUP_PENDING',
+        entity: 'User',
+        entityId: admin.id,
+        description: `Admin account ${admin.email} registered for "${existingSchool.name}" — pending approval by an existing admin`,
+        method: 'POST',
+        path: '/api/auth/register-school',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+      return res.status(201).json({
+        pendingApproval: true,
+        message:
+          'Registration received. Your account will be valid once an existing administrator approves it.',
+        user: {
+          id: admin.id,
+          name: admin.name,
+          email: admin.email,
+          role: 'ADMIN',
+          isActive: false,
+          schoolId: existingSchool.id,
+        },
+      });
     }
 
     const hashedPassword = await bcrypt.hash(data.password, 10);
@@ -334,7 +443,10 @@ router.post('/register', async (req, res, next) => {
           // Self-registered teachers may log in to complete their profile
           // setup, but their registration stays PENDING until an admin
           // approves it (see teacherRegistrationService.approve).
-          isActive: true,
+          // Admins registering into a school with an active admin are
+          // created inactive (pendingApproval path); the first admin of a
+          // school activates instantly.
+          isActive: data.role === 'ADMIN' ? false : true,
           schoolId,
           userIdCode,
         },
@@ -382,6 +494,24 @@ router.post('/register', async (req, res, next) => {
       });
     });
 
+    // A pending-approval admin must NOT receive a session — they are told
+    // their account awaits approval by an existing admin instead.
+    if (!user.isActive) {
+      return res.status(201).json({
+        pendingApproval: true,
+        message:
+          'Registration received. Your account will be valid once an existing administrator approves it.',
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          isActive: user.isActive,
+          schoolId,
+        },
+      });
+    }
+
     const token = jwt.sign(
       { id: user.id, role: user.role, roles: user.roles || [user.role], schoolId },
       process.env.JWT_SECRET!,
@@ -390,6 +520,7 @@ router.post('/register', async (req, res, next) => {
 
     res.status(201).json({
       token,
+      pendingApproval: false,
       user: {
         id: user.id,
         name: user.name,
