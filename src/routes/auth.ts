@@ -152,6 +152,21 @@ router.get('/schools', async (_req, res, next) => {
   }
 });
 
+// Public email availability check for live sign-up validation. Returns only
+// whether the email is already registered (no account details are exposed).
+router.get('/check-email', async (req, res, next) => {
+  try {
+    const email = String(req.query.email || '').toLowerCase().trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'A valid email is required' });
+    }
+    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    res.json({ exists: !!existing });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // School self-signup: creates a NEW school (tenant) together with its first
 // ADMIN account in one atomic operation. Public – no auth required.
 router.post('/register-school', async (req, res, next) => {
