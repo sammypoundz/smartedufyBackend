@@ -109,27 +109,34 @@ export const defaultReportTemplateService = {
     });
     if (existing) return { created: false, template: existing };
 
+    // The School model stores name + logoUrl only. Contact info (phone/
+    // email) comes from the school's first active ADMIN user instead.
     const school = await prisma.school.findUnique({
       where: { id: schoolId },
-      select: {
-        name: true,
-        logoUrl: true,
-        address: true,
-        phone: true,
-        email: true,
-      },
-    } as any);
-    const name = school?.name || "My School";
+      select: { name: true, logoUrl: true },
+    });
+    const admin = await prisma.user.findFirst({
+      where: { schoolId, role: "ADMIN", isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { phone: true, email: true },
+    });
+    const schoolData = {
+      name: school?.name || "My School",
+      logoUrl: school?.logoUrl || null,
+      address: "",
+      phone: admin?.phone || "",
+      email: admin?.email || "",
+    };
 
     const template = await prisma.reportCardTemplate.create({
       data: {
-        name: `${name} — Default Report Card`,
+        name: `${schoolData.name} Default Report Card`,
         description:
           "Built-in SmartEdufy default template, pre-filled with your school's details. Fully editable.",
         academicLevel: "OTHER",
         status: "APPROVED",
         isDefault: true,
-        htmlTemplate: sanitizeTemplateHtml(defaultHtml(school as any)),
+        htmlTemplate: sanitizeTemplateHtml(defaultHtml(schoolData)),
         cssTemplate: sanitizeTemplateCss(DEFAULT_CSS),
         fieldMappings: JSON.stringify({}),
         tableConfigurations: JSON.stringify({}),
