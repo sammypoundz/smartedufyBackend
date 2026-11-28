@@ -29,6 +29,9 @@ import {
   generateReportCardPdf,
 } from "../services/reportCardRenderService";
 import { gateTokens } from "../services/tokenGate";
+import {
+  defaultReportTemplateService,
+} from "../services/defaultReportTemplateService";
 import { logAiUsage } from "../services/aiUsageService";
 void logAiUsage;
 
@@ -604,6 +607,52 @@ function sampleData(): any {
     generated: { date: new Date().toLocaleDateString("en-GB") },
   };
 }
+
+/**
+ * POST /api/report-templates/create-default - one-click DEFAULT template.
+ * Idempotent: creates the school default report card template (approved,
+ * pre-filled with the school name/logo/address/phone/email) only if one
+ * does not already exist. No AI tokens are charged.
+ */
+router.post(
+  "/report-templates/create-default",
+  authMiddleware,
+  privilegeGuard("reports"),
+  async (req: Request, res: Response) => {
+    try {
+      const user = requireAuth(req);
+      const tenantId = requireTenant(req);
+      const { created, template } = await defaultReportTemplateService.ensureDefault(tenantId, user.id);
+      res.status(created ? 201 : 200).json({ created, template });
+    } catch (err: any) {
+      handleError(res, err, "Could not create the default template");
+    }
+  },
+);
+
+/**
+ * PUT /api/report-templates/:id/editor - Template Editor save.
+ * Persists manually edited HTML/CSS from the Report Designer editor
+ * (sanitised + version-bumped; the previous version is archived).
+ */
+router.put(
+  "/report-templates/:id/editor",
+  authMiddleware,
+  privilegeGuard("reports"),
+  async (req: Request, res: Response) => {
+    try {
+      const tenantId = requireTenant(req);
+      const htmlTemplate = req.body.htmlTemplate === undefined ? undefined : String(req.body.htmlTemplate);
+      const cssTemplate = req.body.cssTemplate === undefined ? undefined : String(req.body.cssTemplate);
+      if (htmlTemplate === undefined && cssTemplate === undefined)
+        return res.status(400).json({ error: "Nothing to save" });
+      const saved = await defaultReportTemplateService.saveEdits(getString(req.params.id), tenantId, { htmlTemplate, cssTemplate });
+      res.json(saved);
+    } catch (err: any) {
+      handleError(res, err, "Editor save failed");
+    }
+  },
+);
 
 // ============================ Assignment endpoints ============================
 
